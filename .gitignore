@@ -1,0 +1,32 @@
+# Local identities, messages, relay state, and preferences
+*.db
+*.db-shm
+*.db-wal
+*.vault
+preferences.json
+.env
+.env.*
+issues.txt
+
+# Python and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.layout-check/
+.test-qt-data/
+.updater-test-*/
+tmp*/
+
+# Builds, releases, and editors
+build/
+dist/
+*.spec
+.venv/
+venv/
+.idea/
+.vscode/
+
+# Updater staging
+updates/
+*.part
