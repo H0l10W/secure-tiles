@@ -25,6 +25,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed `
     --add-data "secure_tiles\qml;secure_tiles\qml" `
     --add-data "assets;assets" `
     --hidden-import relay_server `
+    --hidden-import _cffi_backend `
     "main.py"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 

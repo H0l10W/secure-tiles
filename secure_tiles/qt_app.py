@@ -808,6 +808,8 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 
 
 def main():
+    smoke_test = "--smoke-test" in sys.argv
+    if smoke_test: sys.argv.remove("--smoke-test")
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     QGuiApplication.setApplicationName("Secure Tiles")
     QGuiApplication.setOrganizationName("Secure Tiles")
@@ -825,6 +827,7 @@ def main():
     width = max(880, min(3840, int(controller.preferences.get("window_width", 1100))))
     height = max(580, min(2160, int(controller.preferences.get("window_height", 720))))
     window.setWidth(width); window.setHeight(height)
+    if smoke_test: QTimer.singleShot(1500, application.quit)
     def closing():
         controller._save_preferences(window_width=window.width(), window_height=window.height())
         controller.shutdown()
