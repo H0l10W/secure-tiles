@@ -2,6 +2,17 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.3.0 - 2026-08-14
+
+- Fixed installer and portable updates failing before replacement because the hidden PowerShell helper used a reserved process variable.
+- Added reliable relaunching after both silent installer updates and portable executable replacement.
+- Reduced active-conversation message polling from 2.5 seconds to half a second, with adaptive idle and background polling to conserve relay capacity.
+- Added animated three-dot typing indicators using short-lived end-to-end encrypted and signed typing signals.
+- Added encrypted live presence with avatar badges for Online, Away, Do Not Disturb, Invisible, and offline states.
+- Moved message search and Profile controls to the conversation header and made incoming sender names and avatars open contact profiles.
+- Added focused hover feedback for clickable sender names and avatars without highlighting entire message rows.
+- Added true circular masking for square profile images while keeping presence badges outside the crop.
+
 ## 0.2.2 - 2026-08-14
 
 - Fixed existing accounts sometimes being absent from the hosted username directory after upgrading.

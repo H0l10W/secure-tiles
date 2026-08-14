@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 
 ApplicationWindow {
@@ -118,14 +119,38 @@ ApplicationWindow {
         background: Rectangle { color: root.c.tile; radius: Math.max(4, root.corner - 2); border.width: field.activeFocus ? 1 : 0; border.color: root.c.accent }
     }
 
-    component Avatar: Rectangle {
+    component StatusBadge: Rectangle {
+        id: badge
+        property string status: "Offline"
+        property int size: 14
+        width: size; height: size; radius: size / 2; z: 5
+        color: status === "Online" ? "#23a55a" : status === "Away" ? "#f0b232" : status === "Do Not Disturb" ? "#f23f43" : "#80848e"
+        border.width: 2; border.color: root.c.panel
+        AppText {
+            anchors.centerIn: parent
+            text: badge.status === "Do Not Disturb" ? "−" : badge.status === "Away" ? "◔" : ""
+            color: badge.status === "Away" ? root.c.bg : "white"
+            font.pixelSize: Math.max(7, badge.size * .62); font.bold: true
+        }
+    }
+
+    component Avatar: Item {
         id: avatar
         property int size: 40
         property string initials: backend.displayName.slice(0, 2).toUpperCase()
-        width: size; height: size; radius: size / 2; clip: true
-        color: root.c.accent
-        Image { anchors.fill: parent; source: backend.avatarUrl; fillMode: Image.PreserveAspectCrop; visible: backend.avatarUrl !== ""; cache: false }
-        Text { anchors.centerIn: parent; visible: backend.avatarUrl === ""; text: avatar.initials; color: root.c.bg; font.bold: true; font.pixelSize: avatar.size * .34; renderType: Text.NativeRendering }
+        property string status: backend.presence
+        width: size; height: size
+        Rectangle {
+            anchors.fill: parent; radius: avatar.size / 2; color: root.c.accent
+            Rectangle { id: avatarMask; anchors.fill: parent; radius: width / 2; visible: false; layer.enabled: true }
+            Image {
+                anchors.fill: parent; source: backend.avatarUrl; fillMode: Image.PreserveAspectCrop; visible: backend.avatarUrl !== ""; cache: false
+                layer.enabled: true
+                layer.effect: MultiEffect { maskEnabled: true; maskSource: avatarMask }
+            }
+            Text { anchors.centerIn: parent; visible: backend.avatarUrl === ""; text: avatar.initials; color: root.c.bg; font.bold: true; font.pixelSize: avatar.size * .34; renderType: Text.NativeRendering }
+        }
+        StatusBadge { status: avatar.status; size: Math.max(12, Math.round(avatar.size * .32)); anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.rightMargin: -1; anchors.bottomMargin: -1 }
     }
 
     Rectangle {
@@ -218,11 +243,11 @@ ApplicationWindow {
                         onAccepted: backend.hasVault ? backend.unlock(text, "") : backend.signup(signupName.text, text)
                     }
                     AppText { visible: !backend.hasVault; text: "Securely connects through the hosted relay automatically."; color: root.c.muted; font.pixelSize: 11 }
-                    AppText { Layout.fillWidth: true; text: backend.status; color: root.c.danger; wrapMode: Text.Wrap; font.pixelSize: 12 }
+                    AppText { Layout.fillWidth: true; text: backend.status; color: backend.busy ? root.c.accent : root.c.danger; wrapMode: Text.Wrap; font.pixelSize: 12 }
                     Item { Layout.fillHeight: true }
                     AppButton {
                         Layout.fillWidth: true; accent: true; enabled: !backend.busy
-                        text: backend.hasVault ? "Unlock" : backend.busy ? "Creating account..." : "Create secure account"
+                        text: backend.busy ? (backend.hasVault ? "Connecting..." : "Creating account...") : backend.hasVault ? "Unlock" : "Create secure account"
                         onClicked: backend.hasVault ? backend.unlock(password.text, "") : backend.signup(signupName.text, password.text)
                     }
                 }
@@ -289,6 +314,7 @@ ApplicationWindow {
                                                 color: contactButton.accent ? root.c.accent : root.c.text
                                                 font.pixelSize: 10; font.bold: true
                                             }
+                                            StatusBadge { status: modelData.presence; size: 11; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.rightMargin: -2; anchors.bottomMargin: -2 }
                                         }
                                         AppText {
                                             visible: backend.sidebarExpanded
@@ -388,13 +414,17 @@ ApplicationWindow {
             spacing: 8
             RowLayout {
                 Layout.fillWidth: true
-                ColumnLayout { spacing: 2; Layout.fillWidth: true
+                ColumnLayout { spacing: 2
                     AppText { text: backend.selectedName ? backend.selectedDisplayName : "Choose someone to start"; font.pixelSize: 21; font.bold: true }
                     AppText { visible: backend.selectedName !== "" && backend.selectedDisplayName !== backend.selectedName; text: "@" + backend.selectedName; color: root.c.muted; font.pixelSize: 10 }
                     AppText { text: backend.selectedName ? "End-to-end encrypted. Open Profile to verify identity." : "Messages are encrypted before leaving this device."; color: root.c.muted; font.pixelSize: 12 }
                 }
-                AppField { visible: backend.selectedName !== ""; Layout.preferredWidth: 190; implicitHeight: 36; placeholderText: "Search messages"; onTextChanged: chatRoot.searchQuery = text.toLowerCase() }
-                AppButton { text: "Profile"; enabled: backend.selectedName !== ""; ToolTip.visible: hovered; ToolTip.text: "View identity and safety number"; onClicked: backend.openPage("contact") }
+                Item { Layout.fillWidth: true }
+                RowLayout {
+                    visible: backend.selectedName !== ""; Layout.alignment: Qt.AlignTop; spacing: 6
+                    AppField { Layout.preferredWidth: 190; implicitHeight: 36; placeholderText: "Search messages"; onTextChanged: chatRoot.searchQuery = text.toLowerCase() }
+                    AppButton { text: "Profile"; Layout.preferredHeight: 36; ToolTip.visible: hovered; ToolTip.text: "View identity and safety number"; onClicked: backend.openPage("contact") }
+                }
             }
             ListView {
                 id: history; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: root.compactMessages ? 3 : 9
@@ -404,7 +434,7 @@ ApplicationWindow {
                 header: Item {
                     width: history.width; height: history.count === 0 ? Math.max(180, history.height * .65) : 0
                     ColumnLayout { anchors.centerIn: parent; visible: history.count === 0; spacing: 7
-                        Rectangle { Layout.alignment: Qt.AlignHCenter; width: 62; height: 62; radius: 31; color: root.c.tile; AppText { anchors.centerIn: parent; text: backend.selectedName ? backend.selectedDisplayName.slice(0,2).toUpperCase() : "✦"; font.pixelSize: 21; font.bold: true } }
+                        Rectangle { Layout.alignment: Qt.AlignHCenter; width: 62; height: 62; radius: 31; color: root.c.tile; AppText { anchors.centerIn: parent; text: backend.selectedName ? backend.selectedDisplayName.slice(0,2).toUpperCase() : "✦"; font.pixelSize: 21; font.bold: true } StatusBadge { visible: backend.selectedName !== ""; status: backend.selectedPresence; size: 18; anchors.right: parent.right; anchors.bottom: parent.bottom } }
                         AppText { Layout.alignment: Qt.AlignHCenter; text: backend.selectedName ? "Start your conversation with " + backend.selectedDisplayName : "Choose someone from People"; font.pixelSize: 16; font.bold: true }
                         AppText { Layout.alignment: Qt.AlignHCenter; text: backend.selectedName ? "Your first message will be encrypted before it leaves this device." : "Add a username or select the demo account to begin."; color: root.c.muted; font.pixelSize: 11 }
                     }
@@ -416,7 +446,7 @@ ApplicationWindow {
                     property bool matchesSearch: chatRoot.searchQuery === "" || modelData.searchText.indexOf(chatRoot.searchQuery) >= 0
                     visible: matchesSearch
                     height: visible ? messageLayout.implicitHeight + (root.compactMessages ? 8 : 16) + (modelData.showDate ? 30 : 0) : 0
-                    color: messageHover.containsMouse ? root.c.tile : "transparent"
+                    color: "transparent"
                     radius: 7
                     RowLayout {
                         visible: messageRow.modelData.showDate
@@ -428,15 +458,26 @@ ApplicationWindow {
                     RowLayout {
                         id: messageLayout; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.leftMargin: 10; anchors.rightMargin: 8; anchors.topMargin: root.compactMessages ? 4 : 8; anchors.bottomMargin: root.compactMessages ? 4 : 8; spacing: 10
                         Rectangle {
+                            id: messageAvatar
                             visible: !root.compactMessages; Layout.preferredWidth: 38; Layout.preferredHeight: 38; radius: 19
-                            color: messageRow.modelData.outgoing ? root.c.accent : root.c.hover
+                            color: messageRow.modelData.outgoing ? root.c.accent : avatarProfileArea.containsMouse ? root.c.tile : root.c.hover
+                            border.width: avatarProfileArea.containsMouse ? 2 : 0; border.color: root.c.accent
+                            scale: avatarProfileArea.containsMouse ? 1.06 : 1
+                            Behavior on color { ColorAnimation { duration: root.motion } }
+                            Behavior on scale { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
                             AppText { anchors.centerIn: parent; text: messageRow.modelData.outgoing ? backend.displayName.slice(0,2).toUpperCase() : backend.selectedDisplayName.slice(0,2).toUpperCase(); color: messageRow.modelData.outgoing ? root.c.bg : root.c.text; font.bold: true; font.pixelSize: 11 }
+                            StatusBadge { status: messageRow.modelData.outgoing ? backend.presence : backend.selectedPresence; size: 13; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.rightMargin: -1; anchors.bottomMargin: -1 }
+                            MouseArea { id: avatarProfileArea; anchors.fill: parent; enabled: !messageRow.modelData.outgoing; hoverEnabled: true; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: backend.openPage("contact") }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 2
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 7
-                                AppText { text: messageRow.modelData.sender; color: root.c.accent; font.pixelSize: Math.round(11 * root.uiScale); font.bold: true }
+                                AppText {
+                                    text: messageRow.modelData.sender; color: senderProfileArea.containsMouse ? root.c.text : root.c.accent; font.pixelSize: Math.round(11 * root.uiScale); font.bold: true; font.underline: senderProfileArea.containsMouse
+                                    Behavior on color { ColorAnimation { duration: root.motion } }
+                                    MouseArea { id: senderProfileArea; anchors.fill: parent; enabled: !messageRow.modelData.outgoing; hoverEnabled: true; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: backend.openPage("contact") }
+                                }
                                 AppText { text: messageRow.modelData.timestamp; color: root.c.muted; font.pixelSize: Math.round(10 * root.uiScale); ToolTip.visible: timestampHover.containsMouse; ToolTip.text: messageRow.modelData.fullTimestamp; MouseArea { id: timestampHover; anchors.fill: parent; hoverEnabled: true } }
                                 Item { Layout.fillWidth: true }
                             }
@@ -462,11 +503,30 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        AppButton { visible: messageHover.containsMouse && messageRow.modelData.plainText !== ""; text: "Copy"; quiet: true; Layout.preferredWidth: 54; Layout.preferredHeight: 30; onClicked: backend.copyText(messageRow.modelData.plainText) }
+                        AppButton { visible: messageHover.hovered && messageRow.modelData.plainText !== ""; text: "Copy"; quiet: true; Layout.preferredWidth: 54; Layout.preferredHeight: 30; onClicked: backend.copyText(messageRow.modelData.plainText) }
                     }
-                    MouseArea { id: messageHover; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
+                    HoverHandler { id: messageHover }
                 }
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            }
+            RowLayout {
+                id: typingIndicator
+                visible: backend.selectedTyping
+                Layout.leftMargin: 8; Layout.bottomMargin: 1; spacing: 5
+                AppText { text: backend.selectedDisplayName + " is typing"; color: root.c.muted; font.pixelSize: 11 }
+                Repeater {
+                    model: 3
+                    Rectangle {
+                        width: 5; height: 5; radius: 3; color: root.c.accent; opacity: .3
+                        SequentialAnimation on opacity {
+                            running: typingIndicator.visible; loops: Animation.Infinite
+                            PauseAnimation { duration: index * 140 }
+                            NumberAnimation { to: 1; duration: 180 }
+                            NumberAnimation { to: .3; duration: 180 }
+                            PauseAnimation { duration: (2 - index) * 140 }
+                        }
+                    }
+                }
             }
             Panel {
                 id: composerPanel
@@ -507,7 +567,11 @@ ApplicationWindow {
                             id: composer; Layout.fillWidth: true; Layout.fillHeight: true
                             color: root.c.text; placeholderText: backend.selectedName ? "Message " + backend.selectedDisplayName : "Choose a contact first"; placeholderTextColor: root.c.muted
                             font.family: "Segoe UI"; font.pixelSize: 14; wrapMode: TextEdit.Wrap; padding: 10
-                            onTextChanged: { if (length > 4000) remove(4000, length) }
+                            onTextChanged: {
+                                if (length > 4000) remove(4000, length)
+                                backend.setTyping(length > 0 && activeFocus)
+                            }
+                            onActiveFocusChanged: backend.setTyping(length > 0 && activeFocus)
                             background: Rectangle { color: root.c.panel; radius: 8 }
                             Keys.onReturnPressed: function(event) {
                                 var shouldSend = backend.enterToSend ? !(event.modifiers & Qt.ShiftModifier) : (event.modifiers & Qt.ControlModifier)
@@ -542,7 +606,7 @@ ApplicationWindow {
             Panel {
                 Layout.fillWidth: true; Layout.preferredHeight: 390; color: root.c.bg
                 ColumnLayout { anchors.fill: parent; anchors.margins: 26; spacing: 8
-                    Rectangle { width: 82; height: 82; radius: 41; color: root.c.tile; AppText { anchors.centerIn: parent; text: backend.selectedIsDemo ? "BOT" : backend.selectedName.slice(0,2).toUpperCase(); font.pixelSize: 23; font.bold: true } }
+                    Rectangle { width: 82; height: 82; radius: 41; color: root.c.tile; AppText { anchors.centerIn: parent; text: backend.selectedIsDemo ? "BOT" : backend.selectedName.slice(0,2).toUpperCase(); font.pixelSize: 23; font.bold: true } StatusBadge { status: backend.selectedPresence; size: 22; anchors.right: parent.right; anchors.bottom: parent.bottom } }
                     AppText { text: backend.selectedDisplayName; font.pixelSize: 21; font.bold: true }
                     AppText { text: "@" + backend.selectedName; color: root.c.muted }
                     AppText { text: backend.selectedIsDemo ? "Demo encrypted echo account" : "Secure Tiles contact"; color: root.c.muted }
@@ -718,7 +782,7 @@ ApplicationWindow {
         AppText { text: "Privacy"; font.pixelSize: 19; font.bold: true }
         AppText { text: "Private keys remain encrypted locally. The relay handles ciphertext only."; color: root.c.muted }
         SettingToggle { title: "Show decrypted message content"; description: "Hide local conversation text when disabled; encrypted messages remain stored."; settingKey: "message_previews"; checked: backend.settings.message_previews === undefined ? true : backend.settings.message_previews }
-        SettingToggle { title: "Send typing indicators"; description: "Reserved for future delivery; no typing metadata is currently sent."; settingKey: "typing_indicators"; checked: backend.settings.typing_indicators === undefined ? false : backend.settings.typing_indicators }
+        SettingToggle { title: "Send typing indicators"; description: "Let the selected contact see animated dots while you compose a message."; settingKey: "typing_indicators"; checked: backend.settings.typing_indicators === undefined ? true : backend.settings.typing_indicators }
         Item { Layout.fillHeight: true }
     } }
     Component { id: notificationSettings; ColumnLayout {

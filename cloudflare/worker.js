@@ -87,13 +87,46 @@ async function enqueue(request, env) {
   return json({ ok: true });
 }
 
+async function setTyping(request, env) {
+  const packet = await requestJson(request);
+  const required = ["protocol", "type", "id", "to", "from", "ciphertext"];
+  if (required.some(key => !(key in packet)) || packet.protocol !== "secure-tiles-v1" || packet.type !== "message") {
+    throw new Error("Invalid typing packet");
+  }
+  const recipient = await env.DB.prepare("SELECT 1 AS found FROM users WHERE encryption_key = ?").bind(packet.to).first();
+  if (!recipient) throw new Error("Recipient is not registered");
+  await env.DB.prepare("INSERT INTO typing VALUES (?, ?, ?, ?) ON CONFLICT(sender, recipient) DO UPDATE SET packet = excluded.packet, updated = excluded.updated")
+    .bind(packet.from, packet.to, JSON.stringify(packet), Math.floor(Date.now() / 1000)).run();
+  return json({ ok: true });
+}
+
+async function setPresence(request, env) {
+  const packet = await requestJson(request);
+  const required = ["protocol", "type", "id", "to", "from", "ciphertext"];
+  if (required.some(key => !(key in packet)) || packet.protocol !== "secure-tiles-v1" || packet.type !== "message") {
+    throw new Error("Invalid presence packet");
+  }
+  const recipient = await env.DB.prepare("SELECT 1 AS found FROM users WHERE encryption_key = ?").bind(packet.to).first();
+  if (!recipient) throw new Error("Recipient is not registered");
+  await env.DB.prepare("INSERT INTO presence VALUES (?, ?, ?, ?) ON CONFLICT(sender, recipient) DO UPDATE SET packet = excluded.packet, updated = excluded.updated")
+    .bind(packet.from, packet.to, JSON.stringify(packet), Math.floor(Date.now() / 1000)).run();
+  return json({ ok: true });
+}
+
 async function drain(recipient, env) {
+  const now = Math.floor(Date.now() / 1000);
   const rows = await env.DB.prepare("SELECT id, packet FROM queue WHERE recipient = ? ORDER BY created LIMIT 100")
     .bind(recipient).all();
+  const typing = await env.DB.prepare("SELECT packet FROM typing WHERE recipient = ? AND updated >= ?")
+    .bind(recipient, now - 5).all();
+  const presence = await env.DB.prepare("SELECT packet FROM presence WHERE recipient = ? AND updated >= ?")
+    .bind(recipient, now - 45).all();
   if (rows.results.length) {
     await env.DB.batch(rows.results.map(row => env.DB.prepare("DELETE FROM queue WHERE id = ?").bind(row.id)));
   }
-  return json({ messages: rows.results.map(row => JSON.parse(row.packet)) });
+  return json({ messages: rows.results.map(row => JSON.parse(row.packet)),
+                typing: typing.results.map(row => JSON.parse(row.packet)),
+                presence: presence.results.map(row => JSON.parse(row.packet)) });
 }
 
 async function attachmentAction(id, action, request, env) {
@@ -155,6 +188,8 @@ async function attachmentAction(id, action, request, env) {
 async function cleanup(env) {
   const now = Math.floor(Date.now() / 1000);
   await env.DB.prepare("DELETE FROM queue WHERE created < ?").bind(now - MESSAGE_TTL_SECONDS).run();
+  await env.DB.prepare("DELETE FROM typing WHERE updated < ?").bind(now - 10).run();
+  await env.DB.prepare("DELETE FROM presence WHERE updated < ?").bind(now - 90).run();
   const expired = await env.DB.prepare("SELECT id FROM attachments WHERE created < ? LIMIT 100")
     .bind(now - ATTACHMENT_TTL_SECONDS).all();
   for (const row of expired.results) {
@@ -174,6 +209,8 @@ export default {
       if (request.method === "PUT" && url.pathname === "/v1/users") return await register(request, env);
       if (request.method === "GET" && parts.length === 3 && parts[0] === "v1" && parts[1] === "users") return await lookup(parts[2], env);
       if (request.method === "POST" && url.pathname === "/v1/messages") return await enqueue(request, env);
+      if (request.method === "POST" && url.pathname === "/v1/typing") return await setTyping(request, env);
+      if (request.method === "POST" && url.pathname === "/v1/presence") return await setPresence(request, env);
       if (request.method === "GET" && parts.length === 3 && parts[0] === "v1" && parts[1] === "messages") return await drain(parts[2], env);
       if (request.method === "POST" && parts.length === 4 && parts[0] === "v1" && parts[1] === "attachments") {
         return await attachmentAction(parts[2], parts[3], request, env);

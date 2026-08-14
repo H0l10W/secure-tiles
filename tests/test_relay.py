@@ -45,6 +45,28 @@ class RelayTests(unittest.TestCase):
         self.client.register(public_card(first, "Case_Name"))
         with self.assertRaises(RelayError): self.client.register(public_card(second, "case_name"))
 
+    def test_encrypted_typing_state_is_returned_with_inbox(self):
+        sender, recipient = Identity.generate(), Identity.generate()
+        sender_card = public_card(sender, "typing_sender")
+        recipient_card = public_card(recipient, "typing_recipient")
+        self.client.register(sender_card); self.client.register(recipient_card)
+        packet = encrypt_message(sender, validate_card(recipient_card), "\0secure-tiles-typing:on")
+        self.client.send_typing(packet)
+        state = self.client.inbox_state(recipient.encryption_public)
+        self.assertEqual(state["typing"][0]["id"], packet["id"])
+        self.assertEqual(state["messages"], [])
+
+    def test_encrypted_presence_state_is_returned_with_inbox(self):
+        sender, recipient = Identity.generate(), Identity.generate()
+        sender_card = public_card(sender, "presence_sender")
+        recipient_card = public_card(recipient, "presence_recipient")
+        self.client.register(sender_card); self.client.register(recipient_card)
+        packet = encrypt_message(sender, validate_card(recipient_card), "\0secure-tiles-presence:Do Not Disturb")
+        self.client.send_presence(packet)
+        state = self.client.inbox_state(recipient.encryption_public)
+        self.assertEqual(state["presence"][0]["id"], packet["id"])
+        self.assertEqual(state["messages"], [])
+
     def test_chunked_attachment_upload_can_resume_and_download(self):
         transfer_id, token = uuid.uuid4().hex, base64.urlsafe_b64encode(b"token" * 8).decode("ascii")
         self.client.begin_attachment(transfer_id, token, "recipient-key", 5, 2)

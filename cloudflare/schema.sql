@@ -14,6 +14,22 @@ CREATE TABLE IF NOT EXISTS queue (
 
 CREATE INDEX IF NOT EXISTS queue_recipient_created ON queue(recipient, created);
 
+CREATE TABLE IF NOT EXISTS typing (
+  sender TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  packet TEXT NOT NULL,
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (sender, recipient)
+);
+
+CREATE TABLE IF NOT EXISTS presence (
+  sender TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  packet TEXT NOT NULL,
+  updated INTEGER NOT NULL,
+  PRIMARY KEY (sender, recipient)
+);
+
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL,

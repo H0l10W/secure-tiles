@@ -64,6 +64,8 @@ DEMO_CARD = validate_card(public_card(DEMO_IDENTITY, "demo_bot"))
 UPDATE_API = "https://api.github.com/repos/H0l10W/secure-tiles/releases/latest"
 DEFAULT_RELAY_URL = "https://secure-tiles-relay.secure-tiles-cloudflare-relay.workers.dev"
 ATTACHMENT_CHUNK_SIZE = 1024 * 1024
+TYPING_SIGNAL_PREFIX = "\0secure-tiles-typing:"
+PRESENCE_SIGNAL_PREFIX = "\0secure-tiles-presence:"
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -74,6 +76,31 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 def _release_asset_name(version: str, installed: bool) -> str:
     kind = "Setup" if installed else "Portable"
     return f"Secure-Tiles-{kind}-v{version}.exe"
+
+
+def _update_apply_script(mode: str) -> str:
+    if mode == "installer":
+        return """param([int]$ParentProcessId, [string]$Package, [string]$Target)
+Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+$installer = Start-Process -FilePath $Package -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS') -Wait -PassThru
+if ($installer.ExitCode -ne 0) { exit $installer.ExitCode }
+for ($attempt = 0; $attempt -lt 30 -and -not (Test-Path -LiteralPath $Target); $attempt++) { Start-Sleep -Milliseconds 500 }
+if (-not (Test-Path -LiteralPath $Target)) { exit 1 }
+Start-Process -FilePath $Target
+Remove-Item -LiteralPath $Package -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $PSCommandPath -Force
+"""
+    return """param([int]$ParentProcessId, [string]$Package, [string]$Target)
+Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+$moved = $false
+for ($attempt = 0; $attempt -lt 60 -and -not $moved; $attempt++) {
+    try { Move-Item -LiteralPath $Package -Destination $Target -Force -ErrorAction Stop; $moved = $true }
+    catch { Start-Sleep -Milliseconds 500 }
+}
+if (-not $moved) { exit 1 }
+Start-Process -FilePath $Target
+Remove-Item -LiteralPath $PSCommandPath -Force
+"""
 
 
 def _safe_extract_release(archive: Path, destination: Path) -> None:
@@ -143,14 +170,24 @@ class Controller(QObject):
         self._checking_updates = False
         self._pending_attachments: list[dict[str, Any]] = []
         self._sending = False
+        self._polling = False
+        self._typing_active = False
+        self._typing_contacts: set[str] = set()
+        self._presence_contacts: dict[str, str] = {}
         self._sidebar_expanded = bool(self.preferences.get("sidebar_expanded", True)) if bool(self.preferences.get("remember_sidebar", True)) else True
         self.jobFinished.connect(self._finish_job)
         self.transferProgress.connect(self._set_transfer_status)
         if bool(self.preferences.get("auto_start_relay", True)):
             self._ensure_local_relay()
         self.poll_timer = QTimer(self)
-        self.poll_timer.setInterval(2500)
+        self.poll_timer.setInterval(500)
         self.poll_timer.timeout.connect(self.poll_inbox)
+        self.typing_timer = QTimer(self)
+        self.typing_timer.setInterval(1800)
+        self.typing_timer.timeout.connect(self._refresh_typing)
+        self.presence_timer = QTimer(self)
+        self.presence_timer.setInterval(20_000)
+        self.presence_timer.timeout.connect(self._publish_presence)
         if bool(self.preferences.get("auto_check_updates", True)):
             QTimer.singleShot(2500, self.checkForUpdates)
 
@@ -209,7 +246,8 @@ class Controller(QObject):
         for card in self.store.contacts():
             meta = metadata.get(card["signing_key"], {}) if isinstance(metadata, dict) else {}
             result.append({**card, "initials": "BOT" if card["signing_key"] == DEMO_CARD["signing_key"] else card["name"][:2].upper(),
-                           "displayName": str(meta.get("nickname", "")).strip() or card["name"], "favorite": bool(meta.get("favorite", False))})
+                           "displayName": str(meta.get("nickname", "")).strip() or card["name"], "favorite": bool(meta.get("favorite", False)),
+                           "presence": "Online" if card["signing_key"] == DEMO_CARD["signing_key"] else self._presence_contacts.get(card["signing_key"], "Offline")})
         return sorted(result, key=lambda card: (not card["favorite"], card["displayName"].lower()))
 
     @Property(str, notify=changed)
@@ -237,6 +275,14 @@ class Controller(QObject):
 
     @Property(bool, notify=changed)
     def selectedIsDemo(self): return bool(self._selected and self._selected["signing_key"] == DEMO_CARD["signing_key"])
+
+    @Property(bool, notify=changed)
+    def selectedTyping(self): return bool(self._selected and self._selected["signing_key"] in self._typing_contacts)
+
+    @Property(str, notify=changed)
+    def selectedPresence(self):
+        if self.selectedIsDemo: return "Online"
+        return self._presence_contacts.get(self.selectedSigningKey, "Offline")
 
     @Property('QVariantList', notify=changed)
     def pendingAttachments(self):
@@ -465,7 +511,7 @@ class Controller(QObject):
     def _enter_messenger(self):
         self.store.add_contact(DEMO_CARD)
         self._page = "chat"; self._status = ""; self._relay_status = "Connecting..."
-        self.poll_timer.start(); self.poll_inbox(); self._notify()
+        self.poll_timer.start(); self.presence_timer.start(); self.poll_inbox(); self._publish_presence(); self._notify()
 
     @Slot(str)
     def openPage(self, page: str): self._page = page; self._notify()
@@ -483,6 +529,7 @@ class Controller(QObject):
 
     @Slot(str)
     def selectContact(self, signing_key: str):
+        self.setTyping(False)
         self._selected = next((c for c in self.store.contacts() if c["signing_key"] == signing_key), None)
         self._pending_attachments = []
         self._page = "chat"; self._notify()
@@ -502,6 +549,7 @@ class Controller(QObject):
                     raise CryptoError("SECURITY WARNING: this username's identity key changed.")
                 self.store.add_contact(card); self._selected = card
                 self._status = f"@{username} added and identity pinned."
+                self._publish_presence()
             except CryptoError as exc: self._status = str(exc)
             self._notify()
         self.run_job(lambda: self.relay.lookup(username), complete)
@@ -561,6 +609,7 @@ class Controller(QObject):
 
     @Slot(str)
     def sendMessage(self, text: str):
+        self.setTyping(False)
         text = text.strip()
         if not self._selected or self._sending or (not text and not self._pending_attachments): return
         if len(text) > 4000:
@@ -608,7 +657,8 @@ class Controller(QObject):
 
     @Slot(str)
     def setPresence(self, value: str):
-        if value in PRESENCE_COLORS: self._save_preferences(presence=value)
+        if value in PRESENCE_COLORS:
+            self._save_preferences(presence=value); self._publish_presence()
 
     @Slot(str)
     def setTheme(self, value: str):
@@ -720,27 +770,9 @@ class Controller(QObject):
         stage = Path(self._update_stage).resolve()
         updates = stage.parent
         script = updates / f"apply-v{self._update_version}.ps1"
-        if self._update_mode == "installer":
-            content = """param([int]$ProcessId, [string]$Package)
-Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
-Start-Process -FilePath $Package -ArgumentList @('/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS')
-Remove-Item -LiteralPath $PSCommandPath -Force
-"""
-            arguments = [str(os.getpid()), str(stage)]
-        else:
-            target = Path(sys.executable).resolve() if self._update_mode == "portable" else self.store.root / stage.name
-            content = """param([int]$ProcessId, [string]$Package, [string]$Target)
-Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
-$moved = $false
-for ($attempt = 0; $attempt -lt 60 -and -not $moved; $attempt++) {
-    try { Move-Item -LiteralPath $Package -Destination $Target -Force -ErrorAction Stop; $moved = $true }
-    catch { Start-Sleep -Milliseconds 500 }
-}
-if (-not $moved) { exit 1 }
-Start-Process -FilePath $Target
-Remove-Item -LiteralPath $PSCommandPath -Force
-"""
-            arguments = [str(os.getpid()), str(stage), str(target)]
+        target = Path(sys.executable).resolve() if self._update_mode in {"installer", "portable"} else self.store.root / stage.name
+        content = _update_apply_script(self._update_mode)
+        arguments = [str(os.getpid()), str(stage), str(target)]
         script.write_text(content, encoding="utf-8")
         command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                    "-File", str(script), *arguments]
@@ -751,6 +783,7 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 
     @Slot(str, bool)
     def setPreference(self, key: str, value: bool):
+        if key == "typing_indicators" and not value: self.setTyping(False)
         self._save_preferences(**{key: value})
         if key == "auto_start_relay" and value and self.local_relay is None: self._ensure_local_relay()
 
@@ -763,23 +796,77 @@ Remove-Item -LiteralPath $PSCommandPath -Force
         except (OSError, ValueError) as exc: self._status = f"Could not use that image: {exc}"
         self._notify()
 
-    def poll_inbox(self):
+    @Slot(bool)
+    def setTyping(self, active: bool):
+        enabled = bool(self.preferences.get("typing_indicators", True))
+        active = bool(active and enabled and self.identity and self._selected and not self.selectedIsDemo)
+        if active == self._typing_active: return
+        self._typing_active = active
+        if active: self.typing_timer.start()
+        else: self.typing_timer.stop()
+        self._send_typing_signal(active)
+
+    def _refresh_typing(self):
+        if self._typing_active: self._send_typing_signal(True)
+
+    def _send_typing_signal(self, active: bool):
+        if not self.identity or not self._selected or self.selectedIsDemo: return
+        packet = encrypt_message(self.identity, self._selected, TYPING_SIGNAL_PREFIX + ("on" if active else "off"))
+        self.run_job(lambda: self.relay.send_typing(packet), lambda _result, _error: None)
+
+    def _publish_presence(self):
         if not self.identity or self._closing: return
+        status = "Offline" if self.presence == "Invisible" else self.presence
+        contacts = [card for card in self.store.contacts() if card["signing_key"] != DEMO_CARD["signing_key"]]
+        if not contacts: return
         identity = self.identity
-        def complete(packets, error):
+        def work():
+            for contact in contacts:
+                self.relay.send_presence(encrypt_message(identity, contact, PRESENCE_SIGNAL_PREFIX + status))
+        self.run_job(work, lambda _result, _error: None)
+
+    def poll_inbox(self):
+        if not self.identity or self._closing or self._polling: return
+        if not self.application.activeWindow(): interval = 5000
+        elif self._selected: interval = 500
+        else: interval = 2500
+        self.poll_timer.setInterval(interval)
+        self._polling = True
+        identity = self.identity
+        def complete(state, error):
+            self._polling = False
             if self._closing: return
             if error: self._relay_status = "Relay offline"
             else:
                 self._relay_status = "Relay connected"
-                for envelope in packets or []:
+                for envelope in state.get("messages", []):
                     sender = self.store.contact_by_encryption_key(str(envelope.get("from", "")))
                     if not sender: continue
                     try:
                         message = decrypt_message(identity, envelope, sender)
                         self._store_received_message(message, sender)
                     except CryptoError: pass
+                typing_contacts: set[str] = set()
+                for envelope in state.get("typing", []):
+                    sender = self.store.contact_by_encryption_key(str(envelope.get("from", "")))
+                    if not sender: continue
+                    try:
+                        signal = decrypt_message(identity, envelope, sender).get("text", "")
+                        if signal == TYPING_SIGNAL_PREFIX + "on": typing_contacts.add(sender["signing_key"])
+                    except CryptoError: pass
+                self._typing_contacts = typing_contacts
+                presence_contacts: dict[str, str] = {}
+                for envelope in state.get("presence", []):
+                    sender = self.store.contact_by_encryption_key(str(envelope.get("from", "")))
+                    if not sender: continue
+                    try:
+                        signal = str(decrypt_message(identity, envelope, sender).get("text", ""))
+                        status = signal.removeprefix(PRESENCE_SIGNAL_PREFIX) if signal.startswith(PRESENCE_SIGNAL_PREFIX) else ""
+                        if status in {"Online", "Away", "Do Not Disturb"}: presence_contacts[sender["signing_key"]] = status
+                    except CryptoError: pass
+                self._presence_contacts = presence_contacts
             self._notify()
-        self.run_job(lambda: self.relay.inbox(identity.encryption_public), complete)
+        self.run_job(lambda: self.relay.inbox_state(identity.encryption_public), complete)
 
     def _save_preferences(self, **values):
         self.preferences.update(values); self.store.save_preferences(self.preferences); self._notify()
@@ -812,7 +899,8 @@ Remove-Item -LiteralPath $PSCommandPath -Force
 
     def shutdown(self):
         if self._closing: return
-        self._closing = True; self.poll_timer.stop()
+        self.setTyping(False)
+        self._closing = True; self.poll_timer.stop(); self.typing_timer.stop(); self.presence_timer.stop()
         try: self.store.db.close()
         except sqlite3.Error: pass
         if self.local_relay:

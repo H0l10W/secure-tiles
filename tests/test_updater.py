@@ -1,10 +1,13 @@
+import os
 import shutil
+import subprocess
+import time
 import unittest
 import uuid
 import zipfile
 from pathlib import Path
 
-from secure_tiles.qt_app import _release_asset_name, _safe_extract_release, _version_tuple
+from secure_tiles.qt_app import _release_asset_name, _safe_extract_release, _update_apply_script, _version_tuple
 
 
 class UpdaterTests(unittest.TestCase):
@@ -22,6 +25,30 @@ class UpdaterTests(unittest.TestCase):
     def test_release_asset_names_match_packaged_builds(self):
         self.assertEqual(_release_asset_name("0.2.0", True), "Secure-Tiles-Setup-v0.2.0.exe")
         self.assertEqual(_release_asset_name("0.2.0", False), "Secure-Tiles-Portable-v0.2.0.exe")
+
+    def test_update_script_avoids_reserved_pid_and_relaunches(self):
+        for mode in ("installer", "portable"):
+            script = _update_apply_script(mode)
+            self.assertIn("$ParentProcessId", script)
+            self.assertNotIn("$ProcessId", script)
+            self.assertIn("Start-Process -FilePath $Target", script)
+        self.assertIn("-Wait -PassThru", _update_apply_script("installer"))
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell updater test requires Windows")
+    def test_portable_update_script_replaces_and_relaunches_target(self):
+        root = self.fixture()
+        marker = root / "launched.txt"
+        package, target, script = root / "new.cmd", root / "app.cmd", root / "apply.ps1"
+        package.write_text(f'@echo updated>"{marker}"\r\n', encoding="utf-8")
+        target.write_text("@echo old\r\n", encoding="utf-8")
+        script.write_text(_update_apply_script("portable"), encoding="utf-8")
+        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                        "999999", str(package), str(target)], check=True, timeout=15)
+        for _ in range(30):
+            if marker.exists(): break
+            time.sleep(.1)
+        self.assertTrue(marker.exists())
+        self.assertIn("updated", target.read_text(encoding="utf-8"))
 
     def test_release_extraction_rejects_path_traversal(self):
         root = self.fixture()

@@ -39,6 +39,14 @@ class Database:
               id TEXT PRIMARY KEY, recipient TEXT NOT NULL, packet TEXT NOT NULL,
               created INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS typing (
+              sender TEXT NOT NULL, recipient TEXT NOT NULL, packet TEXT NOT NULL,
+              updated INTEGER NOT NULL, PRIMARY KEY (sender, recipient)
+            );
+            CREATE TABLE IF NOT EXISTS presence (
+              sender TEXT NOT NULL, recipient TEXT NOT NULL, packet TEXT NOT NULL,
+              updated INTEGER NOT NULL, PRIMARY KEY (sender, recipient)
+            );
             CREATE TABLE IF NOT EXISTS attachments (
               id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, recipient TEXT NOT NULL,
               total_size INTEGER NOT NULL, chunks INTEGER NOT NULL, created INTEGER NOT NULL
@@ -88,6 +96,38 @@ class Database:
             if rows:
                 self.connection.executemany("DELETE FROM queue WHERE id = ?", [(row["id"],) for row in rows])
                 self.connection.commit()
+        return [json.loads(row["packet"]) for row in rows]
+
+    def set_typing(self, packet: dict[str, Any]) -> None:
+        with self.lock:
+            recipient = self.connection.execute("SELECT 1 FROM users WHERE encryption_key = ?", (packet["to"],)).fetchone()
+            if not recipient: raise ValueError("Recipient is not registered")
+            self.connection.execute(
+                "INSERT INTO typing VALUES (?, ?, ?, ?) ON CONFLICT(sender, recipient) DO UPDATE SET packet = excluded.packet, updated = excluded.updated",
+                (packet["from"], packet["to"], json.dumps(packet), int(time.time())),
+            )
+            self.connection.commit()
+
+    def typing(self, recipient: str) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.connection.execute("SELECT packet FROM typing WHERE recipient = ? AND updated >= ?",
+                                           (recipient, int(time.time()) - 5)).fetchall()
+        return [json.loads(row["packet"]) for row in rows]
+
+    def set_presence(self, packet: dict[str, Any]) -> None:
+        with self.lock:
+            recipient = self.connection.execute("SELECT 1 FROM users WHERE encryption_key = ?", (packet["to"],)).fetchone()
+            if not recipient: raise ValueError("Recipient is not registered")
+            self.connection.execute(
+                "INSERT INTO presence VALUES (?, ?, ?, ?) ON CONFLICT(sender, recipient) DO UPDATE SET packet = excluded.packet, updated = excluded.updated",
+                (packet["from"], packet["to"], json.dumps(packet), int(time.time())),
+            )
+            self.connection.commit()
+
+    def presence(self, recipient: str) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.connection.execute("SELECT packet FROM presence WHERE recipient = ? AND updated >= ?",
+                                           (recipient, int(time.time()) - 45)).fetchall()
         return [json.loads(row["packet"]) for row in rows]
 
     @staticmethod
@@ -191,12 +231,15 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "complete":
                     self.db.complete_attachment(attachment_id, token)
                     return self.reply(200, {"ok": True})
-            if self.path != "/v1/messages": return self.reply(404, {"error": "Not found"})
+            if self.path not in {"/v1/messages", "/v1/typing", "/v1/presence"}: return self.reply(404, {"error": "Not found"})
             packet = self.body()
             required = ("protocol", "type", "id", "to", "from", "ciphertext")
             if any(key not in packet for key in required) or len(json.dumps(packet).encode("utf-8")) > MAX_REQUEST_BYTES:
                 raise ValueError("Invalid packet")
-            self.db.enqueue(packet); self.reply(200, {"ok": True})
+            if self.path == "/v1/typing": self.db.set_typing(packet)
+            elif self.path == "/v1/presence": self.db.set_presence(packet)
+            else: self.db.enqueue(packet)
+            self.reply(200, {"ok": True})
         except (KeyError, ValueError, json.JSONDecodeError) as exc: self.reply(400, {"error": str(exc)})
 
     def do_GET(self):
@@ -206,7 +249,7 @@ class Handler(BaseHTTPRequestHandler):
         if parts[2] == "users":
             card = self.db.lookup(value)
             return self.reply(200, card) if card else self.reply(404, {"error": "Username not found"})
-        if parts[2] == "messages": return self.reply(200, {"messages": self.db.drain(value)})
+        if parts[2] == "messages": return self.reply(200, {"messages": self.db.drain(value), "typing": self.db.typing(value), "presence": self.db.presence(value)})
         self.reply(404, {"error": "Not found"})
 
 

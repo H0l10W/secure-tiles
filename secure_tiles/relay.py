@@ -48,6 +48,12 @@ class RelayClient:
     def send(self, envelope: dict[str, Any]) -> None:
         self._request("POST", "/v1/messages", envelope)
 
+    def send_typing(self, envelope: dict[str, Any]) -> None:
+        self._request("POST", "/v1/typing", envelope)
+
+    def send_presence(self, envelope: dict[str, Any]) -> None:
+        self._request("POST", "/v1/presence", envelope)
+
     def begin_attachment(self, attachment_id: str, token: str, recipient: str, total_size: int, chunks: int) -> None:
         self._request("POST", f"/v1/attachments/{attachment_id}/begin",
                       {"token": token, "recipient": recipient, "total_size": total_size, "chunks": chunks})
@@ -68,5 +74,10 @@ class RelayClient:
         self._request("POST", f"/v1/attachments/{attachment_id}/complete", {"token": token})
 
     def inbox(self, encryption_key: str) -> list[dict[str, Any]]:
+        return self.inbox_state(encryption_key).get("messages", [])
+
+    def inbox_state(self, encryption_key: str) -> dict[str, Any]:
         key = urllib.parse.quote(encryption_key, safe="")
-        return self._request("GET", f"/v1/messages/{key}").get("messages", [])
+        result = self._request("GET", f"/v1/messages/{key}")
+        return {"messages": result.get("messages", []), "typing": result.get("typing", []),
+                "presence": result.get("presence", [])}
