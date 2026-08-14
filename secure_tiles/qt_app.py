@@ -89,27 +89,54 @@ def _release_asset_name(version: str, installed: bool) -> str:
 
 def _update_apply_script(mode: str) -> str:
     if mode == "installer":
-        return """param([int]$ParentProcessId, [string]$Package, [string]$Target)
-Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
-$installer = Start-Process -FilePath $Package -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS') -Wait -PassThru
-if ($installer.ExitCode -ne 0) { exit $installer.ExitCode }
-for ($attempt = 0; $attempt -lt 30 -and -not (Test-Path -LiteralPath $Target); $attempt++) { Start-Sleep -Milliseconds 500 }
-if (-not (Test-Path -LiteralPath $Target)) { exit 1 }
-Start-Process -FilePath $Target
-Remove-Item -LiteralPath $Package -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $PSCommandPath -Force
-"""
-    return """param([int]$ParentProcessId, [string]$Package, [string]$Target)
-Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
-$moved = $false
-for ($attempt = 0; $attempt -lt 60 -and -not $moved; $attempt++) {
-    try { Move-Item -LiteralPath $Package -Destination $Target -Force -ErrorAction Stop; $moved = $true }
-    catch { Start-Sleep -Milliseconds 500 }
+        return """param([int]$ParentProcessId, [string]$Package, [string]$Target, [string]$Log)
+$ErrorActionPreference = 'Stop'
+function Write-UpdateLog([string]$Message) { if ($Log) { Add-Content -LiteralPath $Log -Value "$(Get-Date -Format o) $Message" -Encoding UTF8 } }
+try {
+    Write-UpdateLog "Waiting for parent $ParentProcessId"
+    Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+    Write-UpdateLog "Starting installer $Package"
+    $installer = Start-Process -FilePath $Package -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS') -Wait -PassThru
+    if ($installer.ExitCode -ne 0) { throw "Installer exited with code $($installer.ExitCode)" }
+    for ($attempt = 0; $attempt -lt 120 -and -not (Test-Path -LiteralPath $Target); $attempt++) { Start-Sleep -Milliseconds 500 }
+    if (-not (Test-Path -LiteralPath $Target)) { throw "Installed executable was not found at $Target" }
+    Write-UpdateLog "Relaunching $Target"
+    Start-Process -FilePath $Target -WorkingDirectory (Split-Path -Parent $Target)
+    Remove-Item -LiteralPath $Package -Force -ErrorAction SilentlyContinue
+    Write-UpdateLog 'Update completed'
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-UpdateLog "FAILED: $($_.Exception.Message)"
+    exit 1
 }
-if (-not $moved) { exit 1 }
-Start-Process -FilePath $Target
-Remove-Item -LiteralPath $PSCommandPath -Force
 """
+    return """param([int]$ParentProcessId, [string]$Package, [string]$Target, [string]$Log)
+$ErrorActionPreference = 'Stop'
+function Write-UpdateLog([string]$Message) { if ($Log) { Add-Content -LiteralPath $Log -Value "$(Get-Date -Format o) $Message" -Encoding UTF8 } }
+try {
+    Write-UpdateLog "Waiting for parent $ParentProcessId"
+    Wait-Process -Id $ParentProcessId -ErrorAction SilentlyContinue
+    $moved = $false
+    for ($attempt = 0; $attempt -lt 120 -and -not $moved; $attempt++) {
+        try { Move-Item -LiteralPath $Package -Destination $Target -Force -ErrorAction Stop; $moved = $true }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $moved) { throw "Could not replace $Target" }
+    Write-UpdateLog "Relaunching $Target"
+    Start-Process -FilePath $Target -WorkingDirectory (Split-Path -Parent $Target)
+    Write-UpdateLog 'Update completed'
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-UpdateLog "FAILED: $($_.Exception.Message)"
+    exit 1
+}
+"""
+
+
+def _spawn_update_helper(command: list[str], cwd: Path) -> subprocess.Popen:
+    flags = 0
+    if os.name == "nt": flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    return subprocess.Popen(command, cwd=str(cwd), creationflags=flags, close_fds=False)
 
 
 def _safe_extract_release(archive: Path, destination: Path) -> None:
@@ -921,14 +948,24 @@ class Controller(QObject):
         script = updates / f"apply-v{self._update_version}.ps1"
         target = Path(sys.executable).resolve() if self._update_mode in {"installer", "portable"} else self.store.root / stage.name
         content = _update_apply_script(self._update_mode)
-        arguments = [str(os.getpid()), str(stage), str(target)]
+        log = updates / f"apply-v{self._update_version}.log"
+        log.unlink(missing_ok=True)
+        arguments = [str(os.getpid()), str(stage), str(target), str(log)]
         script.write_text(content, encoding="utf-8")
         command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                    "-File", str(script), *arguments]
-        flags = 0
-        if os.name == "nt": flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-        subprocess.Popen(command, cwd=str(updates), creationflags=flags, close_fds=True)
-        self.application.quit()
+        try:
+            helper = _spawn_update_helper(command, updates)
+        except OSError as exc:
+            self._update_status = f"Could not start the updater: {exc}"; self._notify(); return
+        self._update_status = "Restarting to finish the update..."; self._notify()
+        def finish_handoff():
+            code = helper.poll()
+            if code is None:
+                self.application.quit(); return
+            detail = log.read_text("utf-8", errors="replace").strip() if log.is_file() else f"helper exited with code {code}"
+            self._update_status = f"Updater could not start: {detail}"; self._notify()
+        QTimer.singleShot(750, finish_handoff)
 
     @Slot(str, bool)
     def setPreference(self, key: str, value: bool):

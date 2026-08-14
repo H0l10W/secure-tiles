@@ -2,6 +2,14 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.3.6 - 2026-08-14
+
+- Fixed Restart to update closing both installed and portable builds without completing the update or relaunching the application.
+- Replaced the fragile detached updater process mode with a checked background handoff that remains alive after the application exits.
+- Added updater failure logs and immediate error reporting when the update helper cannot start.
+- Increased installer and portable replacement wait times and relaunch the application from its correct working directory.
+- Added a Windows integration test that verifies the updater survives launcher exit, replaces the target, and relaunches it.
+
 ## 0.3.5 - 2026-08-14
 
 - Added custom application wallpapers, including animated GIF support, with adjustable wallpaper visibility.

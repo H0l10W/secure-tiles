@@ -1,13 +1,14 @@
 import os
 import shutil
 import subprocess
+import sys
 import time
 import unittest
 import uuid
 import zipfile
 from pathlib import Path
 
-from secure_tiles.qt_app import _release_asset_name, _safe_extract_release, _update_apply_script, _version_tuple
+from secure_tiles.qt_app import _release_asset_name, _safe_extract_release, _spawn_update_helper, _update_apply_script, _version_tuple
 
 
 class UpdaterTests(unittest.TestCase):
@@ -49,6 +50,27 @@ class UpdaterTests(unittest.TestCase):
             time.sleep(.1)
         self.assertTrue(marker.exists())
         self.assertIn("updated", target.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.name == "nt", "Detached updater test requires Windows")
+    def test_update_helper_survives_launcher_exit(self):
+        root = self.fixture()
+        marker = root / "detached-launched.txt"
+        package, target, script, launcher = root / "new.cmd", root / "app.cmd", root / "apply.ps1", root / "launcher.py"
+        package.write_text(f'@echo detached>"{marker}"\r\n', encoding="utf-8")
+        target.write_text("@echo old\r\n", encoding="utf-8")
+        script.write_text(_update_apply_script("portable"), encoding="utf-8")
+        launcher.write_text(
+            "import os\nfrom pathlib import Path\nfrom secure_tiles.qt_app import _spawn_update_helper\n"
+            f"command = {['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', str(script)]!r} + [str(os.getpid()), {str(package)!r}, {str(target)!r}, {str(root / 'update.log')!r}]\n"
+            f"_spawn_update_helper(command, Path({str(root)!r}))\n",
+            encoding="utf-8",
+        )
+        environment = dict(os.environ); environment["PYTHONPATH"] = str(Path.cwd())
+        subprocess.run([sys.executable, str(launcher)], check=True, cwd=root, env=environment, timeout=10)
+        for _ in range(50):
+            if marker.exists(): break
+            time.sleep(.1)
+        self.assertTrue(marker.exists())
 
     def test_release_extraction_rejects_path_traversal(self):
         root = self.fixture()
