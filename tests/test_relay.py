@@ -56,3 +56,6 @@ class RelayTests(unittest.TestCase):
         self.client.upload_attachment_chunk(transfer_id, token, 1, second)
         self.assertEqual(base64.urlsafe_b64decode(self.client.download_attachment_chunk(transfer_id, token, 0)), b"encrypted-one")
         self.assertEqual(base64.urlsafe_b64decode(self.client.download_attachment_chunk(transfer_id, token, 1)), b"encrypted-two")
+        self.client.complete_attachment(transfer_id, token)
+        with self.assertRaises(RelayError):
+            self.client.download_attachment_chunk(transfer_id, token, 0)

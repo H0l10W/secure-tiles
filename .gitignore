@@ -26,6 +26,7 @@ dist/
 venv/
 .idea/
 .vscode/
+cloudflare/.wrangler/
 
 # Updater staging
 updates/

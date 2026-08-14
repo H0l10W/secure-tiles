@@ -21,7 +21,7 @@ from nacl.signing import SigningKey, VerifyKey
 
 PROTOCOL = "secure-tiles-v1"
 MAX_ATTACHMENT_COUNT = 5
-MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
 
 class CryptoError(ValueError):
@@ -159,7 +159,7 @@ def _validated_attachments(values: Any) -> list[dict[str, Any]]:
                 token_bytes, key_bytes = _unb64(token), _unb64(key)
             except (KeyError, TypeError, ValueError) as exc:
                 raise CryptoError("Attachment transfer metadata is invalid") from exc
-            if (not 1 <= size <= MAX_ATTACHMENT_BYTES or not 1 <= chunks <= 200 or len(transfer_id) > 64
+            if (not 1 <= size <= MAX_ATTACHMENT_BYTES or not 1 <= chunks <= 50 or len(transfer_id) > 64
                     or len(token_bytes) < 16 or len(key_bytes) != secret.SecretBox.KEY_SIZE
                     or not re.fullmatch(r"[0-9a-f]{64}", digest)):
                 raise CryptoError("Attachment transfer metadata is invalid")
@@ -168,7 +168,7 @@ def _validated_attachments(values: Any) -> list[dict[str, Any]]:
         if not name: raise CryptoError("Attachments must have a name")
         total += int(normalized["size"])
         if total > MAX_ATTACHMENT_BYTES:
-            raise CryptoError("Attachments are limited to 200 MB per message")
+            raise CryptoError("Attachments are limited to 50 MB per message")
         result.append(normalized)
     return result
 

@@ -21,8 +21,8 @@ from typing import Any
 from secure_tiles.crypto import CryptoError, validate_card
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
-MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
-MAX_ATTACHMENT_CHUNKS = 200
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+MAX_ATTACHMENT_CHUNKS = 50
 
 
 class Database:
@@ -135,6 +135,14 @@ class Database:
         if not row: raise ValueError("Attachment chunk is unavailable")
         return bytes(row["data"])
 
+    def complete_attachment(self, attachment_id: str, token: str) -> None:
+        with self.lock:
+            row = self.connection.execute("SELECT token_hash FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+            if not row or row["token_hash"] != self._token_hash(token): raise ValueError("Invalid attachment transfer")
+            self.connection.execute("DELETE FROM attachment_chunks WHERE attachment_id = ?", (attachment_id,))
+            self.connection.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
+            self.connection.commit()
+
 
 class Handler(BaseHTTPRequestHandler):
     db: Database
@@ -180,6 +188,9 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "download":
                     data = self.db.attachment_chunk(attachment_id, token, int(body["index"]))
                     return self.reply(200, {"data": base64.urlsafe_b64encode(data).decode("ascii")})
+                if action == "complete":
+                    self.db.complete_attachment(attachment_id, token)
+                    return self.reply(200, {"ok": True})
             if self.path != "/v1/messages": return self.reply(404, {"error": "Not found"})
             packet = self.body()
             required = ("protocol", "type", "id", "to", "from", "ciphertext")

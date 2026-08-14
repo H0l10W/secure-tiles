@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "secure-tiles-relay",
+  "main": "worker.js",
+  "compatibility_date": "2026-08-14",
+  "workers_dev": true,
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "secure-tiles-relay",
+      "database_id": "3146accb-b4cd-4f0b-b085-8c0ad1938173"
+    }
+  ]
+}

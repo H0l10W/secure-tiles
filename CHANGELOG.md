@@ -2,6 +2,13 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.2.1 - 2026-08-14
+
+- Added an always-online Cloudflare Worker relay that connects automatically on first launch.
+- Migrated existing accounts using the bundled local relay to the hosted relay after their next successful unlock.
+- Reduced the combined attachment limit from 200 MB to 50 MB per message.
+- Added automatic removal of hosted attachment chunks after the recipient verifies the completed download.
+
 ## 0.2.0 - 2026-08-14
 
 - Added end-to-end encrypted file and image attachments with a combined limit of 200 MB per message.

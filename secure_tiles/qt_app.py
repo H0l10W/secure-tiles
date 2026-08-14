@@ -62,6 +62,7 @@ DEMO_IDENTITY = Identity(
 )
 DEMO_CARD = validate_card(public_card(DEMO_IDENTITY, "demo_bot"))
 UPDATE_API = "https://api.github.com/repos/H0l10W/secure-tiles/releases/latest"
+DEFAULT_RELAY_URL = "https://secure-tiles-relay.secure-tiles-cloudflare-relay.workers.dev"
 ATTACHMENT_CHUNK_SIZE = 1024 * 1024
 
 
@@ -123,7 +124,9 @@ class Controller(QObject):
         self.preferences = self.store.preferences()
         self.vault = self.store.load_vault()
         self.identity: Identity | None = None
-        self.relay_url = str((self.vault or {}).get("relay", "http://127.0.0.1:8765"))
+        stored_relay = str((self.vault or {}).get("relay", DEFAULT_RELAY_URL))
+        self._migrate_relay = bool(self.vault and urlparse(stored_relay).hostname in {"127.0.0.1", "localhost", "::1"})
+        self.relay_url = DEFAULT_RELAY_URL if self._migrate_relay else stored_relay
         self.relay = RelayClient(self.relay_url)
         self.local_relay = None
         self._closing = False
@@ -282,6 +285,7 @@ class Controller(QObject):
                     self.transferProgress.emit(f"Downloading {item['name']} — {chunk_index + 1} / {item['chunks']} MB")
             if size != int(item["size"]) or digest.hexdigest() != item["sha256"]:
                 raise CryptoError("Attachment failed its encrypted integrity check")
+            self.relay.complete_attachment(str(item["transfer_id"]), str(item["token"]))
             return {"name": item["name"], "mime": item["mime"], "size": size, "path": str(destination)}
         except Exception:
             destination.unlink(missing_ok=True)
@@ -418,14 +422,27 @@ class Controller(QObject):
     @Slot(str, str)
     def unlock(self, passphrase: str, _unused: str = ""):
         try:
-            self.identity = unlock_identity(self.vault or {}, passphrase)
-            self.relay = RelayClient(self.relay_url)
-            self._enter_messenger()
+            identity = unlock_identity(self.vault or {}, passphrase)
         except CryptoError as exc:
             self._status = str(exc); self._notify()
 
-    @Slot(str, str, str)
-    def signup(self, username: str, passphrase: str, relay_url: str):
+        else:
+            self.identity = identity
+            self.relay = RelayClient(self.relay_url)
+            if not self._migrate_relay:
+                self._enter_messenger(); return
+            self._status = "Connecting your account to the hosted relay..."; self._busy = True; self._notify()
+            def complete(_result, error):
+                self._busy = False
+                if error:
+                    self.identity = None; self._status = str(error); self._notify(); return
+                self.vault = dict(self.vault or {}); self.vault["relay"] = self.relay_url
+                self.store.save_vault(self.vault); self._migrate_relay = False
+                self._enter_messenger()
+            self.run_job(lambda: self.relay.register(public_card(identity, str((self.vault or {})["name"]))), complete)
+
+    @Slot(str, str)
+    def signup(self, username: str, passphrase: str):
         name = username.strip().lower()
         if not re.fullmatch(r"[a-zA-Z0-9_]{1,32}", name):
             self._status = "Use 1-32 letters, numbers, or underscores."; self._notify(); return
@@ -433,7 +450,7 @@ class Controller(QObject):
             identity = Identity.generate(); locked = lock_identity(identity, passphrase)
         except CryptoError as exc:
             self._status = str(exc); self._notify(); return
-        chosen_relay = relay_url.strip() or self.relay_url
+        chosen_relay = DEFAULT_RELAY_URL
         client = RelayClient(chosen_relay)
         self._status = "Creating identity and claiming username..."; self._busy = True; self._notify()
         def complete(_result, error):
@@ -505,8 +522,8 @@ class Controller(QObject):
                 if any(item["path"] == str(path) for item in pending): continue
                 pending.append({"path": str(path), "name": path.name,
                                 "mime": mimetypes.guess_type(path.name)[0] or "application/octet-stream", "size": size})
-            if sum(item["size"] for item in pending) > 200 * 1024 * 1024:
-                raise ValueError("Attachments are limited to 200 MB per message")
+            if sum(item["size"] for item in pending) > 50 * 1024 * 1024:
+                raise ValueError("Attachments are limited to 50 MB per message")
             self._pending_attachments = pending
             self._status = ""
         except (OSError, ValueError) as exc:

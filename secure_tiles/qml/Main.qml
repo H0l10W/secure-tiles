@@ -200,7 +200,7 @@ ApplicationWindow {
             Rectangle { anchors.fill: parent; color: root.c.bg }
             Panel {
                 width: Math.min(440, parent.width - 48)
-                height: backend.hasVault ? 410 : 540
+                height: backend.hasVault ? 410 : 470
                 anchors.centerIn: parent
                 radius: 18
                 ColumnLayout {
@@ -215,16 +215,15 @@ ApplicationWindow {
                     AppField {
                         id: password; Layout.fillWidth: true; echoMode: TextInput.Password
                         placeholderText: backend.hasVault ? "Enter your passphrase" : "At least 10 characters"
-                        onAccepted: backend.hasVault ? backend.unlock(text, "") : backend.signup(signupName.text, text, relay.text)
+                        onAccepted: backend.hasVault ? backend.unlock(text, "") : backend.signup(signupName.text, text)
                     }
-                    AppText { visible: !backend.hasVault; text: "RELAY ADDRESS"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
-                    AppField { id: relay; visible: !backend.hasVault; Layout.fillWidth: true; placeholderText: "http://127.0.0.1:8765" }
+                    AppText { visible: !backend.hasVault; text: "Securely connects through the hosted relay automatically."; color: root.c.muted; font.pixelSize: 11 }
                     AppText { Layout.fillWidth: true; text: backend.status; color: root.c.danger; wrapMode: Text.Wrap; font.pixelSize: 12 }
                     Item { Layout.fillHeight: true }
                     AppButton {
                         Layout.fillWidth: true; accent: true; enabled: !backend.busy
                         text: backend.hasVault ? "Unlock" : backend.busy ? "Creating account..." : "Create secure account"
-                        onClicked: backend.hasVault ? backend.unlock(password.text, "") : backend.signup(signupName.text, password.text, relay.text)
+                        onClicked: backend.hasVault ? backend.unlock(password.text, "") : backend.signup(signupName.text, password.text)
                     }
                 }
             }
@@ -650,7 +649,6 @@ ApplicationWindow {
     Component { id: generalSettings; ColumnLayout {
         AppText { text: "General"; font.pixelSize: 19; font.bold: true }
         AppText { text: "Control how Secure Tiles behaves on this device."; color: root.c.muted }
-        SettingToggle { title: "Start local relay automatically"; description: "Start the bundled loopback relay when the app opens."; settingKey: "auto_start_relay"; checked: backend.settings.auto_start_relay === undefined ? true : backend.settings.auto_start_relay }
         SettingToggle { title: "Check for updates automatically"; description: "Check GitHub Releases after Secure Tiles starts."; settingKey: "auto_check_updates"; checked: backend.settings.auto_check_updates === undefined ? true : backend.settings.auto_check_updates }
         SettingToggle { title: "Use 24-hour timestamps"; description: "Show message times in 24-hour format."; settingKey: "use_24_hour_time"; checked: backend.settings.use_24_hour_time === undefined ? true : backend.settings.use_24_hour_time }
         SettingToggle { title: "Remember sidebar state"; description: "Keep the people sidebar collapsed or expanded between sessions."; settingKey: "remember_sidebar"; checked: backend.settings.remember_sidebar === undefined ? true : backend.settings.remember_sidebar }

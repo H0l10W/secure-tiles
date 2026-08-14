@@ -64,6 +64,9 @@ class RelayClient:
         return str(self._request("POST", f"/v1/attachments/{attachment_id}/download",
                                  {"token": token, "index": index})["data"])
 
+    def complete_attachment(self, attachment_id: str, token: str) -> None:
+        self._request("POST", f"/v1/attachments/{attachment_id}/complete", {"token": token})
+
     def inbox(self, encryption_key: str) -> list[dict[str, Any]]:
         key = urllib.parse.quote(encryption_key, safe="")
         return self._request("GET", f"/v1/messages/{key}").get("messages", [])

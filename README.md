@@ -14,7 +14,7 @@ A modern, Qt Quick desktop messenger with end-to-end encrypted delivery and user
 - No analytics, key escrow, recovery key, or hidden network traffic
 - Username identities are pinned on first contact; changed keys are rejected
 
-This is an auditable MVP, not a professionally audited replacement for Signal. The relay sees usernames, public keys, traffic timing, sender/recipient keys, packet sizes, and ciphertext—but not message plaintext, attachment contents, file names, or private keys. Decrypted message history and attachments are stored locally; full-disk encryption is recommended. A message can contain up to five files with a combined size of 200 MB. Remote attachments use independently encrypted 1 MB chunks; retrying a failed send resumes from the chunks already accepted by the relay, and the receiver verifies the reconstructed file against its signed SHA-256 digest.
+This is an auditable MVP, not a professionally audited replacement for Signal. The relay sees usernames, public keys, traffic timing, sender/recipient keys, packet sizes, and ciphertext—but not message plaintext, attachment contents, file names, or private keys. Decrypted message history and attachments are stored locally; full-disk encryption is recommended. A message can contain up to five files with a combined size of 50 MB. Remote attachments use independently encrypted 1 MB chunks; retrying a failed send resumes from the chunks already accepted by the relay, and the receiver verifies the reconstructed file against its signed SHA-256 digest.
 
 ## Run
 
@@ -23,7 +23,7 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-The app automatically starts the bundled local relay on `127.0.0.1:8765` in a background thread, without opening another window. If that address is already occupied by a running relay, the app reuses it. On first launch, choose a unique username and a strong vault passphrase. Add another registered user by typing only their username. The app fetches and pins their signed public identity in a background worker. Compare the displayed safety number over a trusted channel for stronger protection against a malicious first lookup.
+On first launch, choose a unique username and a strong vault passphrase. The app connects automatically to the hosted Cloudflare relay, so users on different computers can find and message one another without configuring a server address. Add another registered user by typing only their username. The app fetches and pins their signed public identity in a background worker. Compare the displayed safety number over a trusted channel for stronger protection against a malicious first lookup.
 
 Release downloads provide a per-user Windows installer and a standalone portable executable. See `CHANGELOG.md` for the complete version history.
 
@@ -33,7 +33,7 @@ Secure Tiles checks the public `H0l10W/secure-tiles` GitHub Releases feed after 
 
 Pushing to `main` runs the Windows test suite. When the version in `secure_tiles/__init__.py` has not been released before, the workflow creates a matching GitHub Release and attaches the installer, portable executable, and changelog. Bump `__version__` and update `CHANGELOG.md` before pushing a new release.
 
-The automatic relay is local-only, so it is suitable for clients on the same computer. For communication between computers, run `python relay_server.py --host 0.0.0.0` on a server, protect it with an HTTPS reverse proxy, and point each client at that HTTPS URL. The server is multithreaded and stores only public contact cards and opaque encrypted packets.
+The default relay runs as a Cloudflare Worker backed by D1 and stores only public contact cards, opaque encrypted packets, and independently encrypted attachment chunks. Its source and deployment configuration are under `cloudflare/`. The bundled Python relay remains available for development with `python relay_server.py`, but released clients use the hosted HTTPS relay automatically.
 
 ## Threat-model boundaries
 
