@@ -5,6 +5,7 @@ import base64
 import os
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,20 @@ class Store:
         destination = self.root / f"avatar{suffix}"
         shutil.copy2(source, destination)
         values = self.preferences(); values["avatar"] = str(destination); self.save_preferences(values)
+        return destination
+
+    def save_media(self, source: Path, name: str) -> Path:
+        suffix = source.suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            raise ValueError("Choose a PNG, JPG, WebP, or GIF image")
+        if not source.is_file() or source.stat().st_size > 20 * 1024 * 1024:
+            raise ValueError("Images must be available and no larger than 20 MB")
+        destination = self.root / f"{name}-{time.time_ns()}{suffix}"
+        shutil.copy2(source, destination)
+        for old in self.root.glob(f"{name}-*"):
+            if old == destination or not old.is_file(): continue
+            try: old.unlink()
+            except PermissionError: pass
         return destination
 
     def add_contact(self, card: dict[str, str]) -> None:

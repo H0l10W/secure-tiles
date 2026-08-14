@@ -2,6 +2,21 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.3.5 - 2026-08-14
+
+- Added custom application wallpapers, including animated GIF support, with adjustable wallpaper visibility.
+- Added separate custom accent, application background, buttons and inputs, and conversation background colors.
+- Added independent opacity controls for panels, buttons and inputs, wallpaper, and conversation backgrounds.
+- Added custom profile banner images, animated banners, full-profile backgrounds, and removable profile media.
+- Added Modern, Heavy Metal, Vampire, Arcade, and Cipher display-name styles with encrypted sharing between contacts.
+- Added a dedicated Friends view with responsive contact cards and live presence indicators.
+- Refined Settings with compact controls, responsive profile actions, shorter toggles, grouped sections, and consistently sized sliders.
+- Added theme-aware tonal shading, subtle borders, and restrained color hierarchy for buttons, inputs, panels, and navigation controls.
+- Added custom circular profile pictures to outgoing message rows.
+- Added persistent per-conversation unread counters in the people sidebar.
+- Added incoming-message notification sounds that respect the Message sounds preference and remain silent during Do Not Disturb.
+- Improved wallpaper replacement and removal so Windows file locks no longer surface as application errors.
+
 ## 0.3.0 - 2026-08-14
 
 - Fixed installer and portable updates failing before replacement because the hidden PowerShell helper used a reserved process variable.

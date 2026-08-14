@@ -66,6 +66,15 @@ DEFAULT_RELAY_URL = "https://secure-tiles-relay.secure-tiles-cloudflare-relay.wo
 ATTACHMENT_CHUNK_SIZE = 1024 * 1024
 TYPING_SIGNAL_PREFIX = "\0secure-tiles-typing:"
 PRESENCE_SIGNAL_PREFIX = "\0secure-tiles-presence:"
+PROFILE_SIGNAL_PREFIX = "\0secure-tiles-profile:"
+DISPLAY_FONTS = ("Segoe UI", "Bahnschrift", "Georgia", "Trebuchet MS", "Consolas")
+DISPLAY_FONT_OPTIONS = (
+    {"name": "Modern", "family": "Segoe UI"},
+    {"name": "Heavy Metal", "family": "Bahnschrift"},
+    {"name": "Vampire", "family": "Georgia"},
+    {"name": "Arcade", "family": "Trebuchet MS"},
+    {"name": "Cipher", "family": "Consolas"},
+)
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -174,6 +183,11 @@ class Controller(QObject):
         self._typing_active = False
         self._typing_contacts: set[str] = set()
         self._presence_contacts: dict[str, str] = {}
+        self._remote_profiles: dict[str, dict[str, str]] = dict(self.preferences.get("remote_profiles", {}))
+        stored_unread = self.preferences.get("unread_counts", {})
+        self._unread_counts: dict[str, int] = {
+            str(key): max(0, int(value)) for key, value in stored_unread.items()
+        } if isinstance(stored_unread, dict) else {}
         self._sidebar_expanded = bool(self.preferences.get("sidebar_expanded", True)) if bool(self.preferences.get("remember_sidebar", True)) else True
         self.jobFinished.connect(self._finish_job)
         self.transferProgress.connect(self._set_transfer_status)
@@ -229,7 +243,9 @@ class Controller(QObject):
     def colors(self):
         name = str(self.preferences.get("theme", "Midnight"))
         colors = dict(THEMES.get(name, THEMES["Midnight"]))
-        if name == "Custom": colors["accent"] = str(self.preferences.get("custom_accent", colors["accent"]))
+        if name == "Custom":
+            colors["accent"] = str(self.preferences.get("custom_accent", colors["accent"]))
+            colors["bg"] = str(self.preferences.get("custom_background", colors["bg"]))
         return colors
 
     @Property(str, notify=changed)
@@ -245,9 +261,12 @@ class Controller(QObject):
         result = []
         for card in self.store.contacts():
             meta = metadata.get(card["signing_key"], {}) if isinstance(metadata, dict) else {}
+            remote = self._remote_profiles.get(card["signing_key"], {})
             result.append({**card, "initials": "BOT" if card["signing_key"] == DEMO_CARD["signing_key"] else card["name"][:2].upper(),
-                           "displayName": str(meta.get("nickname", "")).strip() or card["name"], "favorite": bool(meta.get("favorite", False)),
-                           "presence": "Online" if card["signing_key"] == DEMO_CARD["signing_key"] else self._presence_contacts.get(card["signing_key"], "Offline")})
+                           "displayName": str(meta.get("nickname", "")).strip() or str(remote.get("display_name", "")).strip() or card["name"],
+                           "displayFont": str(remote.get("display_font", "Segoe UI")), "favorite": bool(meta.get("favorite", False)),
+                           "presence": "Online" if card["signing_key"] == DEMO_CARD["signing_key"] else self._presence_contacts.get(card["signing_key"], "Offline"),
+                           "unread": self._unread_counts.get(card["signing_key"], 0)})
         return sorted(result, key=lambda card: (not card["favorite"], card["displayName"].lower()))
 
     @Property(str, notify=changed)
@@ -259,7 +278,12 @@ class Controller(QObject):
         return values.get(self._selected["signing_key"], {}) if isinstance(values, dict) else {}
 
     @Property(str, notify=changed)
-    def selectedDisplayName(self): return str(self._selected_metadata().get("nickname", "")).strip() or self.selectedName
+    def selectedDisplayName(self):
+        remote = self._remote_profiles.get(self.selectedSigningKey, {})
+        return str(self._selected_metadata().get("nickname", "")).strip() or str(remote.get("display_name", "")).strip() or self.selectedName
+
+    @Property(str, notify=changed)
+    def selectedDisplayFont(self): return str(self._remote_profiles.get(self.selectedSigningKey, {}).get("display_font", "Segoe UI"))
 
     @Property(str, notify=changed)
     def selectedNickname(self): return str(self._selected_metadata().get("nickname", ""))
@@ -338,8 +362,29 @@ class Controller(QObject):
             raise
 
     def _store_received_message(self, message: dict[str, Any], sender: dict[str, str]) -> None:
+        text = str(message.get("text", ""))
+        if text.startswith(PROFILE_SIGNAL_PREFIX):
+            try:
+                profile = json.loads(text.removeprefix(PROFILE_SIGNAL_PREFIX))
+                font = str(profile.get("display_font", "Segoe UI"))
+                name = str(profile.get("display_name", "")).strip()[:32]
+                if font in DISPLAY_FONTS and name:
+                    self._remote_profiles[sender["signing_key"]] = {"display_name": name, "display_font": font}
+                    self.preferences["remote_profiles"] = self._remote_profiles
+                    self.store.save_preferences(self.preferences)
+            except (TypeError, ValueError, json.JSONDecodeError): pass
+            self._notify(); return
+        if self.store.message(str(message.get("id", ""))): return
         attachments = message.get("attachments", [])
         self.store.add_message(message["id"], sender["signing_key"], "in", message["sent_at"], message["text"], attachments)
+        is_open = bool(self._selected and self._selected["signing_key"] == sender["signing_key"] and self._page == "chat" and self.application.activeWindow())
+        if not is_open:
+            key = sender["signing_key"]
+            self._unread_counts[key] = self._unread_counts.get(key, 0) + 1
+            self.preferences["unread_counts"] = self._unread_counts
+            self.store.save_preferences(self.preferences)
+        if bool(self.preferences.get("message_sounds", True)) and self.presence != "Do Not Disturb":
+            self.application.beep()
         if not any("transfer_id" in item for item in attachments):
             self._notify(); return
         def work():
@@ -381,6 +426,7 @@ class Controller(QObject):
                 "showDate": date_key != previous_date,
                 "dateLabel": stamp.strftime("%A, %d %B %Y"),
                 "outgoing": row["direction"] == "out",
+                "senderFont": self.displayFont if row["direction"] == "out" else self.selectedDisplayFont,
                 "attachments": attachments,
                 "searchText": (row["plaintext"] + " " + " ".join(str(item.get("name", "")) for item in attachments)).lower(),
             })
@@ -389,6 +435,14 @@ class Controller(QObject):
 
     @Property(str, notify=changed)
     def displayName(self): return str(self.preferences.get("display_name", self.username))
+
+    @Property(str, notify=changed)
+    def displayFont(self):
+        value = str(self.preferences.get("display_font", "Segoe UI"))
+        return value if value in DISPLAY_FONTS else "Segoe UI"
+
+    @Property('QVariantList', constant=True)
+    def displayFontOptions(self): return list(DISPLAY_FONT_OPTIONS)
 
     @Property(str, notify=changed)
     def customStatus(self): return str(self.preferences.get("custom_status", ""))
@@ -404,6 +458,34 @@ class Controller(QObject):
 
     @Property(str, notify=changed)
     def bannerColor(self): return str(self.preferences.get("banner_color", self.colors["accent"]))
+
+    def _media_url(self, key: str) -> str:
+        path = Path(str(self.preferences.get(key, "")))
+        return QUrl.fromLocalFile(str(path)).toString() if path.is_file() else ""
+
+    @Property(str, notify=changed)
+    def wallpaperUrl(self): return self._media_url("wallpaper")
+
+    @Property(str, notify=changed)
+    def profileBackgroundUrl(self): return self._media_url("profile_background")
+
+    @Property(str, notify=changed)
+    def profileBannerUrl(self): return self._media_url("profile_banner")
+
+    @Property(float, notify=changed)
+    def wallpaperOpacity(self): return max(0., min(1., float(self.preferences.get("wallpaper_opacity", .7))))
+
+    @Property(float, notify=changed)
+    def panelOpacity(self): return max(.2, min(1., float(self.preferences.get("panel_opacity", .94))))
+
+    @Property(float, notify=changed)
+    def controlOpacity(self): return max(.2, min(1., float(self.preferences.get("control_opacity", 1.))))
+
+    @Property(float, notify=changed)
+    def messageBackgroundOpacity(self): return max(.0, min(1., float(self.preferences.get("message_background_opacity", 1.))))
+
+    @Property(str, notify=changed)
+    def buttonColor(self): return str(self.preferences.get("button_color", self.colors["tile"]))
 
     @Property(str, notify=changed)
     def presence(self): return str(self.preferences.get("presence", "Online"))
@@ -531,6 +613,9 @@ class Controller(QObject):
     def selectContact(self, signing_key: str):
         self.setTyping(False)
         self._selected = next((c for c in self.store.contacts() if c["signing_key"] == signing_key), None)
+        if self._unread_counts.pop(signing_key, 0):
+            self.preferences["unread_counts"] = self._unread_counts
+            self.store.save_preferences(self.preferences)
         self._pending_attachments = []
         self._page = "chat"; self._notify()
 
@@ -549,7 +634,7 @@ class Controller(QObject):
                     raise CryptoError("SECURITY WARNING: this username's identity key changed.")
                 self.store.add_contact(card); self._selected = card
                 self._status = f"@{username} added and identity pinned."
-                self._publish_presence()
+                self._publish_presence(); self._publish_profile()
             except CryptoError as exc: self._status = str(exc)
             self._notify()
         self.run_job(lambda: self.relay.lookup(username), complete)
@@ -648,12 +733,29 @@ class Controller(QObject):
             self._notify()
         self.run_job(work, complete)
 
-    @Slot(str, str, str, str, str, str)
-    def saveProfile(self, display_name: str, custom_status: str, bio: str, pronouns: str, banner_color: str, status_emoji: str):
+    @Slot(str, str, str, str, str, str, str)
+    def saveProfile(self, display_name: str, custom_status: str, bio: str, pronouns: str, banner_color: str, status_emoji: str, display_font: str):
+        if display_font not in DISPLAY_FONTS: display_font = "Segoe UI"
         self._save_preferences(display_name=display_name.strip()[:32] or self.username,
                                custom_status=custom_status.strip()[:80], bio=bio.strip()[:190],
-                               pronouns=pronouns.strip()[:40], banner_color=banner_color, status_emoji=status_emoji.strip()[:8])
+                               pronouns=pronouns.strip()[:40], banner_color=banner_color, status_emoji=status_emoji.strip()[:8],
+                               display_font=display_font)
+        self._publish_profile()
         self._status = "Profile saved."; self._notify()
+
+    @Slot(str)
+    def setDisplayFont(self, display_font: str):
+        if display_font not in DISPLAY_FONTS: return
+        self._save_preferences(display_font=display_font)
+        self._publish_profile()
+
+    def _publish_profile(self):
+        if not self.identity: return
+        contacts = [c for c in self.store.contacts() if c["signing_key"] != DEMO_CARD["signing_key"]]
+        if not contacts: return
+        payload = PROFILE_SIGNAL_PREFIX + json.dumps({"display_name": self.displayName, "display_font": self.displayFont}, separators=(",", ":"))
+        identity = self.identity
+        self.run_job(lambda: [self.relay.send(encrypt_message(identity, contact, payload)) for contact in contacts], lambda _r, _e: None)
 
     @Slot(str)
     def setPresence(self, value: str):
@@ -668,6 +770,53 @@ class Controller(QObject):
     def chooseCustomAccent(self):
         color = QColorDialog.getColor(QColor(str(self.preferences.get("custom_accent", "#82d2ff"))), None, "Choose interface accent")
         if color.isValid(): self._save_preferences(theme="Custom", custom_accent=color.name())
+
+    @Slot()
+    def chooseCustomBackground(self):
+        color = QColorDialog.getColor(QColor(str(self.preferences.get("custom_background", "#101112"))), None, "Choose app background")
+        if color.isValid(): self._save_preferences(theme="Custom", custom_background=color.name())
+
+    @Slot()
+    def chooseButtonColor(self):
+        color = QColorDialog.getColor(QColor(self.buttonColor), None, "Choose button color")
+        if color.isValid(): self._save_preferences(button_color=color.name())
+
+    @Slot()
+    def resetButtonColor(self):
+        self.preferences.pop("button_color", None); self.store.save_preferences(self.preferences); self._notify()
+
+    def _choose_media(self, key: str, name: str, title: str):
+        filename, _ = QFileDialog.getOpenFileName(None, title, "", "Images (*.png *.jpg *.jpeg *.webp *.gif)")
+        if not filename: return
+        try: self._save_preferences(**{key: str(self.store.save_media(Path(filename), name))})
+        except (OSError, ValueError) as exc: self._status = f"Could not use that image: {exc}"; self._notify()
+
+    @Slot()
+    def chooseWallpaper(self): self._choose_media("wallpaper", "wallpaper", "Choose app wallpaper")
+
+    @Slot()
+    def chooseProfileBackground(self): self._choose_media("profile_background", "profile-background", "Choose full profile background")
+
+    @Slot()
+    def chooseProfileBanner(self): self._choose_media("profile_banner", "profile-banner", "Choose profile banner")
+
+    @Slot(str)
+    def clearMedia(self, key: str):
+        if key not in {"wallpaper", "profile_background", "profile_banner"}: return
+        path = Path(str(self.preferences.pop(key, "")))
+        self.store.save_preferences(self.preferences); self._notify()
+        def remove_file(attempt: int = 0):
+            try:
+                if path.is_file() and path.parent == self.store.root: path.unlink(missing_ok=True)
+            except PermissionError:
+                if attempt < 10: QTimer.singleShot(200, lambda: remove_file(attempt + 1))
+        QTimer.singleShot(0, remove_file)
+
+    @Slot(str, float)
+    def setOpacity(self, key: str, value: float):
+        if key in {"wallpaper_opacity", "panel_opacity", "control_opacity", "message_background_opacity"}:
+            minimum = .0 if key == "wallpaper_opacity" else .2
+            self._save_preferences(**{key: max(minimum, min(1., value))})
 
     @Slot()
     def chooseBannerColor(self):
