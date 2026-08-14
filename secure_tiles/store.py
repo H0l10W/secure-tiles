@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 import os
 import shutil
 import sqlite3
@@ -13,6 +14,8 @@ class Store:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.vault_path = root / "identity.vault"
+        self.attachments_path = root / "attachments"
+        self.attachments_path.mkdir(exist_ok=True)
         self.db = sqlite3.connect(root / "messages.db")
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -25,6 +28,10 @@ class Store:
                 sent_at INTEGER NOT NULL, plaintext TEXT NOT NULL
             );
         """)
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(messages)")}
+        if "attachments" not in columns:
+            self.db.execute("ALTER TABLE messages ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'")
+            self.db.commit()
 
     def save_vault(self, vault: dict[str, Any]) -> None:
         temp = self.vault_path.with_suffix(".tmp")
@@ -79,12 +86,48 @@ class Store:
         row = self.db.execute("SELECT card FROM contacts WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
         return json.loads(row["card"]) if row else None
 
-    def add_message(self, message_id: str, contact_key: str, direction: str, sent_at: int, plaintext: str) -> None:
+    def add_message(self, message_id: str, contact_key: str, direction: str, sent_at: int,
+                    plaintext: str, attachments: list[dict[str, Any]] | None = None) -> None:
+        stored_attachments = []
+        for index, attachment in enumerate(attachments or []):
+            if attachment.get("transfer_id") and not attachment.get("data") and not attachment.get("path"):
+                stored_attachments.append(dict(attachment)); continue
+            name = str(attachment.get("name", "file")).replace("\\", "/").rsplit("/", 1)[-1]
+            safe_name = "".join(char if char.isalnum() or char in "._- " else "_" for char in name)[:180] or "file"
+            destination = self.attachments_path / f"{message_id}-{index}-{safe_name}"
+            data = attachment.get("data")
+            if data:
+                destination.write_bytes(base64.urlsafe_b64decode(str(data).encode("ascii")))
+            elif attachment.get("path"):
+                shutil.copy2(str(attachment["path"]), destination)
+            else:
+                continue
+            stored_attachments.append({"name": name, "mime": str(attachment.get("mime", "application/octet-stream")),
+                                       "size": destination.stat().st_size, "path": str(destination)})
         self.db.execute(
-            "INSERT OR IGNORE INTO messages VALUES (?, ?, ?, ?, ?)",
-            (message_id, contact_key, direction, sent_at, plaintext),
+            "INSERT OR IGNORE INTO messages (id, contact_key, direction, sent_at, plaintext, attachments) VALUES (?, ?, ?, ?, ?, ?)",
+            (message_id, contact_key, direction, sent_at, plaintext, json.dumps(stored_attachments)),
         )
         self.db.commit()
+
+    def replace_attachments(self, message_id: str, attachments: list[dict[str, Any]]) -> None:
+        if not self.message(message_id): return
+        stored = []
+        for index, attachment in enumerate(attachments):
+            name = str(attachment.get("name", "file")).replace("\\", "/").rsplit("/", 1)[-1]
+            safe_name = "".join(char if char.isalnum() or char in "._- " else "_" for char in name)[:180] or "file"
+            source = Path(str(attachment.get("path", "")))
+            if not source.is_file():
+                stored.append(dict(attachment)); continue
+            destination = self.attachments_path / f"{message_id}-{index}-{safe_name}"
+            if source.resolve() != destination.resolve(): shutil.copy2(source, destination)
+            stored.append({"name": name, "mime": str(attachment.get("mime", "application/octet-stream")),
+                           "size": destination.stat().st_size, "path": str(destination)})
+        self.db.execute("UPDATE messages SET attachments = ? WHERE id = ?", (json.dumps(stored), message_id))
+        self.db.commit()
+
+    def message(self, message_id: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
 
     def messages(self, contact_key: str) -> list[sqlite3.Row]:
         return self.db.execute(

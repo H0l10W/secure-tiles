@@ -7,6 +7,8 @@ keys or plaintext. Put it behind an HTTPS reverse proxy for non-local use.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import sqlite3
 import threading
@@ -17,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from secure_tiles.crypto import CryptoError, validate_card
+
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
+MAX_ATTACHMENT_CHUNKS = 200
 
 
 class Database:
@@ -32,6 +38,14 @@ class Database:
             CREATE TABLE IF NOT EXISTS queue (
               id TEXT PRIMARY KEY, recipient TEXT NOT NULL, packet TEXT NOT NULL,
               created INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS attachments (
+              id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, recipient TEXT NOT NULL,
+              total_size INTEGER NOT NULL, chunks INTEGER NOT NULL, created INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS attachment_chunks (
+              attachment_id TEXT NOT NULL, chunk_index INTEGER NOT NULL, data BLOB NOT NULL,
+              PRIMARY KEY (attachment_id, chunk_index)
             );
         """)
 
@@ -76,6 +90,51 @@ class Database:
                 self.connection.commit()
         return [json.loads(row["packet"]) for row in rows]
 
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+    def begin_attachment(self, attachment_id: str, token: str, recipient: str, total_size: int, chunks: int) -> None:
+        if not (1 <= total_size <= MAX_ATTACHMENT_BYTES and 1 <= chunks <= MAX_ATTACHMENT_CHUNKS):
+            raise ValueError("Invalid attachment size")
+        with self.lock:
+            existing = self.connection.execute("SELECT * FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+            values = (self._token_hash(token), recipient, total_size, chunks)
+            if existing:
+                if (existing["token_hash"], existing["recipient"], existing["total_size"], existing["chunks"]) != values:
+                    raise ValueError("Attachment upload does not match its existing transfer")
+                return
+            self.connection.execute("INSERT INTO attachments VALUES (?, ?, ?, ?, ?, ?)",
+                                    (attachment_id, *values, int(time.time())))
+            self.connection.commit()
+
+    def attachment_status(self, attachment_id: str, token: str) -> list[int]:
+        with self.lock:
+            row = self.connection.execute("SELECT token_hash FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+            if not row or row["token_hash"] != self._token_hash(token): raise ValueError("Invalid attachment transfer")
+            rows = self.connection.execute("SELECT chunk_index FROM attachment_chunks WHERE attachment_id = ? ORDER BY chunk_index", (attachment_id,)).fetchall()
+        return [int(item["chunk_index"]) for item in rows]
+
+    def put_attachment_chunk(self, attachment_id: str, token: str, index: int, encoded: str) -> None:
+        try: data = base64.b64decode(encoded.encode("ascii"), altchars=b"-_", validate=True)
+        except (ValueError, UnicodeEncodeError) as exc: raise ValueError("Invalid attachment chunk") from exc
+        if len(data) > 1024 * 1024 + 64: raise ValueError("Attachment chunk is too large")
+        with self.lock:
+            row = self.connection.execute("SELECT token_hash, chunks FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+            if not row or row["token_hash"] != self._token_hash(token) or not 0 <= index < row["chunks"]:
+                raise ValueError("Invalid attachment transfer")
+            self.connection.execute("INSERT OR IGNORE INTO attachment_chunks VALUES (?, ?, ?)", (attachment_id, index, data))
+            self.connection.commit()
+
+    def attachment_chunk(self, attachment_id: str, token: str, index: int) -> bytes:
+        with self.lock:
+            meta = self.connection.execute("SELECT token_hash, chunks FROM attachments WHERE id = ?", (attachment_id,)).fetchone()
+            if not meta or meta["token_hash"] != self._token_hash(token) or not 0 <= index < meta["chunks"]:
+                raise ValueError("Invalid attachment transfer")
+            row = self.connection.execute("SELECT data FROM attachment_chunks WHERE attachment_id = ? AND chunk_index = ?", (attachment_id, index)).fetchone()
+        if not row: raise ValueError("Attachment chunk is unavailable")
+        return bytes(row["data"])
+
 
 class Handler(BaseHTTPRequestHandler):
     db: Database
@@ -90,7 +149,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def body(self) -> dict[str, Any]:
-        length = min(int(self.headers.get("Content-Length", "0")), 100_000)
+        length = int(self.headers.get("Content-Length", "0"))
+        if length <= 0 or length > MAX_REQUEST_BYTES:
+            raise ValueError("Request is too large")
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def do_PUT(self):
@@ -104,10 +165,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            parts = self.path.split("/")
+            if len(parts) == 5 and parts[2] == "attachments":
+                attachment_id, action = parts[3], parts[4]
+                if len(attachment_id) > 64: raise ValueError("Invalid attachment identifier")
+                body = self.body(); token = str(body.get("token", ""))
+                if action == "begin":
+                    self.db.begin_attachment(attachment_id, token, str(body["recipient"]), int(body["total_size"]), int(body["chunks"]))
+                    return self.reply(200, {"ok": True})
+                if action == "status": return self.reply(200, {"received": self.db.attachment_status(attachment_id, token)})
+                if action == "chunk":
+                    self.db.put_attachment_chunk(attachment_id, token, int(body["index"]), str(body["data"]))
+                    return self.reply(200, {"ok": True})
+                if action == "download":
+                    data = self.db.attachment_chunk(attachment_id, token, int(body["index"]))
+                    return self.reply(200, {"data": base64.urlsafe_b64encode(data).decode("ascii")})
             if self.path != "/v1/messages": return self.reply(404, {"error": "Not found"})
             packet = self.body()
             required = ("protocol", "type", "id", "to", "from", "ciphertext")
-            if any(key not in packet for key in required) or len(json.dumps(packet)) > 100_000:
+            if any(key not in packet for key in required) or len(json.dumps(packet).encode("utf-8")) > MAX_REQUEST_BYTES:
                 raise ValueError("Invalid packet")
             self.db.enqueue(packet); self.reply(200, {"ok": True})
         except (KeyError, ValueError, json.JSONDecodeError) as exc: self.reply(400, {"error": str(exc)})

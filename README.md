@@ -10,10 +10,11 @@ A modern, Qt Quick desktop messenger with end-to-end encrypted delivery and user
 - SecretBox encrypts private identity keys at rest
 - Contact safety numbers allow out-of-band identity verification
 - Unknown senders, altered packets, wrong recipients, stale timestamps, and duplicate message IDs are rejected
+- File names, contents, and image attachments are signed and end-to-end encrypted with their message
 - No analytics, key escrow, recovery key, or hidden network traffic
 - Username identities are pinned on first contact; changed keys are rejected
 
-This is an auditable MVP, not a professionally audited replacement for Signal. The relay sees usernames, public keys, traffic timing, sender/recipient keys, and ciphertext—but not message plaintext or private keys. Message plaintext history is currently stored locally in SQLite after decryption; full-disk encryption is recommended.
+This is an auditable MVP, not a professionally audited replacement for Signal. The relay sees usernames, public keys, traffic timing, sender/recipient keys, packet sizes, and ciphertext—but not message plaintext, attachment contents, file names, or private keys. Decrypted message history and attachments are stored locally; full-disk encryption is recommended. A message can contain up to five files with a combined size of 200 MB. Remote attachments use independently encrypted 1 MB chunks; retrying a failed send resumes from the chunks already accepted by the relay, and the receiver verifies the reconstructed file against its signed SHA-256 digest.
 
 ## Run
 
@@ -24,11 +25,13 @@ python main.py
 
 The app automatically starts the bundled local relay on `127.0.0.1:8765` in a background thread, without opening another window. If that address is already occupied by a running relay, the app reuses it. On first launch, choose a unique username and a strong vault passphrase. Add another registered user by typing only their username. The app fetches and pins their signed public identity in a background worker. Compare the displayed safety number over a trusted channel for stronger protection against a malicious first lookup.
 
+Release downloads provide a per-user Windows installer and a standalone portable executable. See `CHANGELOG.md` for the complete version history.
+
 ## Updates and releases
 
 Secure Tiles checks the public `H0l10W/secure-tiles` GitHub Releases feed after startup. A newer version is downloaded in the background, checked against the SHA-256 digest returned by GitHub, and extracted with path-traversal and size protections. The application is only replaced after the user chooses **Restart to update**. Replaced files are backed up under `~/.secure_tiles/update_backups`.
 
-Pushing to `main` runs the Windows test suite. When the version in `secure_tiles/__init__.py` has not been released before, the workflow creates a matching GitHub Release and attaches `secure-tiles-windows.zip`. Bump `__version__` before pushing a new release.
+Pushing to `main` runs the Windows test suite. When the version in `secure_tiles/__init__.py` has not been released before, the workflow creates a matching GitHub Release and attaches the installer, portable executable, and changelog. Bump `__version__` and update `CHANGELOG.md` before pushing a new release.
 
 The automatic relay is local-only, so it is suitable for clients on the same computer. For communication between computers, run `python relay_server.py --host 0.0.0.0` on a server, protect it with an HTTPS reverse proxy, and point each client at that HTTPS URL. The server is multithreaded and stores only public contact cards and opaque encrypted packets.
 

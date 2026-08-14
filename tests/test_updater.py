@@ -4,7 +4,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from secure_tiles.qt_app import _safe_extract_release, _version_tuple
+from secure_tiles.qt_app import _release_asset_name, _safe_extract_release, _version_tuple
 
 
 class UpdaterTests(unittest.TestCase):
@@ -18,6 +18,10 @@ class UpdaterTests(unittest.TestCase):
         self.assertGreater(_version_tuple("v0.2.0"), _version_tuple("0.1.9"))
         self.assertEqual(_version_tuple("0.1.0"), (0, 1, 0))
         self.assertEqual(_version_tuple("not-a-version"), ())
+
+    def test_release_asset_names_match_packaged_builds(self):
+        self.assertEqual(_release_asset_name("0.2.0", True), "Secure-Tiles-Setup-v0.2.0.exe")
+        self.assertEqual(_release_asset_name("0.2.0", False), "Secure-Tiles-Portable-v0.2.0.exe")
 
     def test_release_extraction_rejects_path_traversal(self):
         root = self.fixture()

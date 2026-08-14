@@ -1,4 +1,5 @@
 import json
+import base64
 import threading
 import unittest
 import uuid
@@ -43,3 +44,15 @@ class RelayTests(unittest.TestCase):
         first, second = Identity.generate(), Identity.generate()
         self.client.register(public_card(first, "Case_Name"))
         with self.assertRaises(RelayError): self.client.register(public_card(second, "case_name"))
+
+    def test_chunked_attachment_upload_can_resume_and_download(self):
+        transfer_id, token = uuid.uuid4().hex, base64.urlsafe_b64encode(b"token" * 8).decode("ascii")
+        self.client.begin_attachment(transfer_id, token, "recipient-key", 5, 2)
+        first = base64.urlsafe_b64encode(b"encrypted-one").decode("ascii")
+        second = base64.urlsafe_b64encode(b"encrypted-two").decode("ascii")
+        self.client.upload_attachment_chunk(transfer_id, token, 0, first)
+        self.assertEqual(self.client.attachment_status(transfer_id, token), {0})
+        self.client.begin_attachment(transfer_id, token, "recipient-key", 5, 2)
+        self.client.upload_attachment_chunk(transfer_id, token, 1, second)
+        self.assertEqual(base64.urlsafe_b64decode(self.client.download_attachment_chunk(transfer_id, token, 0)), b"encrypted-one")
+        self.assertEqual(base64.urlsafe_b64decode(self.client.download_attachment_chunk(transfer_id, token, 1)), b"encrypted-two")

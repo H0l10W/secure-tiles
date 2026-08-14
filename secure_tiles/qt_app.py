@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import html
+import base64
 import hashlib
 import json
+import mimetypes
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -13,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +27,7 @@ from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QColorDialog, QFileDialog
+from nacl import secret, utils
 
 from .crypto import (
     CryptoError, Identity, decrypt_message, encrypt_message, fingerprint,
@@ -57,12 +62,17 @@ DEMO_IDENTITY = Identity(
 )
 DEMO_CARD = validate_card(public_card(DEMO_IDENTITY, "demo_bot"))
 UPDATE_API = "https://api.github.com/repos/H0l10W/secure-tiles/releases/latest"
-UPDATE_ASSET = "secure-tiles-windows.zip"
+ATTACHMENT_CHUNK_SIZE = 1024 * 1024
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
     match = re.fullmatch(r"v?(\d+(?:\.\d+)*)", value.strip())
     return tuple(int(part) for part in match.group(1).split(".")) if match else ()
+
+
+def _release_asset_name(version: str, installed: bool) -> str:
+    kind = "Setup" if installed else "Portable"
+    return f"Secure-Tiles-{kind}-v{version}.exe"
 
 
 def _safe_extract_release(archive: Path, destination: Path) -> None:
@@ -103,6 +113,7 @@ def markdown_html(value: str) -> str:
 class Controller(QObject):
     changed = Signal()
     jobFinished = Signal(object, object, object)
+    transferProgress = Signal(str)
 
     def __init__(self, application: QApplication):
         super().__init__()
@@ -125,9 +136,13 @@ class Controller(QObject):
         self._update_status = ""
         self._update_version = ""
         self._update_stage = ""
+        self._update_mode = ""
         self._checking_updates = False
+        self._pending_attachments: list[dict[str, Any]] = []
+        self._sending = False
         self._sidebar_expanded = bool(self.preferences.get("sidebar_expanded", True)) if bool(self.preferences.get("remember_sidebar", True)) else True
         self.jobFinished.connect(self._finish_job)
+        self.transferProgress.connect(self._set_transfer_status)
         if bool(self.preferences.get("auto_start_relay", True)):
             self._ensure_local_relay()
         self.poll_timer = QTimer(self)
@@ -138,6 +153,10 @@ class Controller(QObject):
 
     def _notify(self) -> None:
         self.changed.emit()
+
+    @Slot(str)
+    def _set_transfer_status(self, value: str) -> None:
+        self._status = value; self._notify()
 
     @Property(bool, notify=changed)
     def hasVault(self): return self.vault is not None
@@ -217,6 +236,77 @@ class Controller(QObject):
     def selectedIsDemo(self): return bool(self._selected and self._selected["signing_key"] == DEMO_CARD["signing_key"])
 
     @Property('QVariantList', notify=changed)
+    def pendingAttachments(self):
+        return [{"name": item["name"], "sizeLabel": self._size_label(item["size"])} for item in self._pending_attachments]
+
+    @staticmethod
+    def _size_label(size: int) -> str:
+        if size >= 1024 * 1024: return f"{size / (1024 * 1024):.1f} MB"
+        if size >= 1024: return f"{size / 1024:.1f} KB"
+        return f"{size} B"
+
+    def _upload_attachment(self, item: dict[str, Any], recipient: str) -> dict[str, Any]:
+        path = Path(item["path"])
+        transfer_id, token = item["transfer_id"], item["token"]
+        key = base64.urlsafe_b64decode(item["key"].encode("ascii"))
+        chunks = (item["size"] + ATTACHMENT_CHUNK_SIZE - 1) // ATTACHMENT_CHUNK_SIZE
+        self.relay.begin_attachment(transfer_id, token, recipient, item["size"], chunks)
+        received = self.relay.attachment_status(transfer_id, token)
+        digest = hashlib.sha256(); box = secret.SecretBox(key)
+        with path.open("rb") as source:
+            for index in range(chunks):
+                raw = source.read(ATTACHMENT_CHUNK_SIZE)
+                if not raw: raise OSError(f"{path.name} changed while it was being sent")
+                digest.update(raw)
+                if index not in received:
+                    encrypted = bytes(box.encrypt(raw))
+                    self.relay.upload_attachment_chunk(transfer_id, token, index,
+                                                        base64.urlsafe_b64encode(encrypted).decode("ascii"))
+                self.transferProgress.emit(f"Uploading {item['name']} — {index + 1} / {chunks} MB")
+            if source.read(1): raise OSError(f"{path.name} changed while it was being sent")
+        return {"name": item["name"], "mime": item["mime"], "size": item["size"],
+                "transfer_id": transfer_id, "token": token, "key": item["key"],
+                "chunks": chunks, "sha256": digest.hexdigest()}
+
+    def _download_attachment(self, item: dict[str, Any], message_id: str, index: int) -> dict[str, Any]:
+        key = base64.urlsafe_b64decode(str(item["key"]).encode("ascii")); box = secret.SecretBox(key)
+        safe_name = "".join(char if char.isalnum() or char in "._- " else "_" for char in str(item["name"]))[:180] or "file"
+        destination = self.store.root / f"incoming-{message_id}-{index}-{safe_name}.part"
+        digest = hashlib.sha256(); size = 0
+        try:
+            with destination.open("wb") as output:
+                for chunk_index in range(int(item["chunks"])):
+                    encoded = self.relay.download_attachment_chunk(str(item["transfer_id"]), str(item["token"]), chunk_index)
+                    encrypted = base64.urlsafe_b64decode(encoded.encode("ascii"))
+                    raw = box.decrypt(encrypted); output.write(raw); digest.update(raw); size += len(raw)
+                    self.transferProgress.emit(f"Downloading {item['name']} — {chunk_index + 1} / {item['chunks']} MB")
+            if size != int(item["size"]) or digest.hexdigest() != item["sha256"]:
+                raise CryptoError("Attachment failed its encrypted integrity check")
+            return {"name": item["name"], "mime": item["mime"], "size": size, "path": str(destination)}
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+
+    def _store_received_message(self, message: dict[str, Any], sender: dict[str, str]) -> None:
+        attachments = message.get("attachments", [])
+        self.store.add_message(message["id"], sender["signing_key"], "in", message["sent_at"], message["text"], attachments)
+        if not any("transfer_id" in item for item in attachments):
+            self._notify(); return
+        def work():
+            return [self._download_attachment(item, message["id"], index) if "transfer_id" in item else item
+                    for index, item in enumerate(attachments)]
+        def complete(files, error):
+            if error: self._status = f"Attachment download failed: {error}"; self._notify(); return
+            try:
+                self.store.replace_attachments(message["id"], files)
+            finally:
+                for item in files:
+                    path = Path(str(item.get("path", "")))
+                    if path.suffix == ".part": path.unlink(missing_ok=True)
+            self._notify()
+        self.run_job(work, complete)
+
+    @Property('QVariantList', notify=changed)
     def messages(self):
         if not self._selected: return []
         result = []
@@ -226,7 +316,14 @@ class Controller(QObject):
         for row in self.store.messages(self._selected["signing_key"]):
             stamp = datetime.fromtimestamp(row["sent_at"])
             date_key = stamp.date()
+            attachments = json.loads(row["attachments"] or "[]") if show_content else []
+            for attachment in attachments:
+                path = Path(str(attachment.get("path", "")))
+                attachment["sizeLabel"] = self._size_label(int(attachment.get("size", 0)))
+                attachment["previewUrl"] = QUrl.fromLocalFile(str(path)).toString() if str(attachment.get("mime", "")).startswith("image/") and path.is_file() else ""
+                attachment["available"] = path.is_file()
             result.append({
+                "id": row["id"],
                 "sender": "YOU" if row["direction"] == "out" else self.selectedDisplayName,
                 "plainText": row["plaintext"] if show_content else "", "body": markdown_html(row["plaintext"]) if show_content else "<i>Message content hidden by Privacy settings.</i>",
                 "timestamp": stamp.strftime("%H:%M" if use_24_hour else "%I:%M %p").lstrip("0"),
@@ -234,6 +331,8 @@ class Controller(QObject):
                 "showDate": date_key != previous_date,
                 "dateLabel": stamp.strftime("%A, %d %B %Y"),
                 "outgoing": row["direction"] == "out",
+                "attachments": attachments,
+                "searchText": (row["plaintext"] + " " + " ".join(str(item.get("name", "")) for item in attachments)).lower(),
             })
             previous_date = date_key
         return result
@@ -369,6 +468,7 @@ class Controller(QObject):
     @Slot(str)
     def selectContact(self, signing_key: str):
         self._selected = next((c for c in self.store.contacts() if c["signing_key"] == signing_key), None)
+        self._pending_attachments = []
         self._page = "chat"; self._notify()
 
     @Slot(str)
@@ -390,33 +490,98 @@ class Controller(QObject):
             self._notify()
         self.run_job(lambda: self.relay.lookup(username), complete)
 
+    @Slot()
+    def chooseAttachments(self):
+        if self._sending: return
+        filenames, _ = QFileDialog.getOpenFileNames(None, "Attach files", "", "All files (*)")
+        if not filenames: return
+        pending = list(self._pending_attachments)
+        try:
+            for filename in filenames:
+                path = Path(filename)
+                size = path.stat().st_size
+                if not path.is_file() or size <= 0: raise ValueError(f"{path.name} is empty or unavailable")
+                if len(pending) >= 5: raise ValueError("A message can contain up to 5 files")
+                if any(item["path"] == str(path) for item in pending): continue
+                pending.append({"path": str(path), "name": path.name,
+                                "mime": mimetypes.guess_type(path.name)[0] or "application/octet-stream", "size": size})
+            if sum(item["size"] for item in pending) > 200 * 1024 * 1024:
+                raise ValueError("Attachments are limited to 200 MB per message")
+            self._pending_attachments = pending
+            self._status = ""
+        except (OSError, ValueError) as exc:
+            self._status = f"Could not attach files: {exc}"
+        self._notify()
+
+    @Slot(int)
+    def removeAttachment(self, index: int):
+        if not self._sending and 0 <= index < len(self._pending_attachments):
+            self._pending_attachments.pop(index); self._notify()
+
+    @Slot(str, int)
+    def saveAttachment(self, message_id: str, index: int):
+        row = self.store.message(message_id)
+        if not row: return
+        try:
+            attachments = json.loads(row["attachments"] or "[]")
+            attachment = attachments[index]
+            if attachment.get("transfer_id"):
+                self._status = f"Downloading {attachment['name']}..."; self._notify()
+                def work(): return self._download_attachment(attachment, message_id, index)
+                def complete(file, error):
+                    if error: self._status = f"Attachment download failed: {error}"; self._notify(); return
+                    attachments[index] = file
+                    try: self.store.replace_attachments(message_id, attachments)
+                    finally: Path(str(file["path"])).unlink(missing_ok=True)
+                    self._status = f"Downloaded {file['name']}. Choose Save to export it."; self._notify()
+                self.run_job(work, complete); return
+            source = Path(str(attachment["path"]))
+            filename, _ = QFileDialog.getSaveFileName(None, "Save attachment", attachment["name"], "All files (*)")
+            if filename:
+                shutil.copy2(source, filename); self._status = f"Saved {attachment['name']}."
+        except (IndexError, KeyError, OSError, TypeError, json.JSONDecodeError) as exc:
+            self._status = f"Could not save attachment: {exc}"
+        self._notify()
+
     @Slot(str)
     def sendMessage(self, text: str):
         text = text.strip()
-        if not self._selected or not text: return
+        if not self._selected or self._sending or (not text and not self._pending_attachments): return
         if len(text) > 4000:
             self._status = "Messages are limited to 4,000 characters."; self._notify(); return
-        try: packet = encrypt_message(self.identity, self._selected, text)  # type: ignore[arg-type]
-        except CryptoError as exc: self._status = str(exc); self._notify(); return
         contact = self._selected
-        self._status = "Sending encrypted packet..."; self._notify()
-        def delivered(_result, error):
-            if error: self._status = f"Not sent: {error}"; self._notify(); return
-            self.store.add_message(packet["id"], contact["signing_key"], "out", int(time.time()), text)
-            self._status = "Delivered to encrypted relay."; self._notify()
-        if contact["signing_key"] != DEMO_CARD["signing_key"]:
-            self.run_job(lambda: self.relay.send(packet), delivered); return
-        def demo_reply():
+        identity = self.identity
+        for item in self._pending_attachments:
+            item.setdefault("transfer_id", str(uuid.uuid4()))
+            item.setdefault("token", base64.urlsafe_b64encode(utils.random(32)).decode("ascii"))
+            item.setdefault("key", base64.urlsafe_b64encode(utils.random(secret.SecretBox.KEY_SIZE)).decode("ascii"))
+        pending = [dict(item) for item in self._pending_attachments]
+        self._sending = True; self._status = "Encrypting attachments..." if pending else "Sending encrypted packet..."; self._notify()
+        def work():
+            if contact["signing_key"] == DEMO_CARD["signing_key"]:
+                files = [{"name": item["name"], "mime": item["mime"], "size": item["size"],
+                          "data": base64.urlsafe_b64encode(Path(item["path"]).read_bytes()).decode("ascii")} for item in pending]
+            else:
+                files = [self._upload_attachment(item, contact["encryption_key"]) for item in pending]
+            packet = encrypt_message(identity, contact, text, files)  # type: ignore[arg-type]
+            if contact["signing_key"] != DEMO_CARD["signing_key"]:
+                self.relay.send(packet); return packet, None
             time.sleep(.2)
-            received = decrypt_message(DEMO_IDENTITY, packet, public_card(self.identity, self.username))  # type: ignore[arg-type]
-            return encrypt_message(DEMO_IDENTITY, public_card(self.identity, self.username), f"Encrypted echo: {received['text']}")  # type: ignore[arg-type]
-        def demo_complete(response, error):
-            delivered(None, error)
-            if error: return
-            message = decrypt_message(self.identity, response, DEMO_CARD)  # type: ignore[arg-type]
-            self.store.add_message(message["id"], DEMO_CARD["signing_key"], "in", message["sent_at"], message["text"])
+            received = decrypt_message(DEMO_IDENTITY, packet, public_card(identity, self.username))  # type: ignore[arg-type]
+            response = encrypt_message(DEMO_IDENTITY, public_card(identity, self.username), f"Encrypted echo: {received['text']}")  # type: ignore[arg-type]
+            return packet, response
+        def complete(result, error):
+            self._sending = False
+            if error: self._status = f"Not sent: {error}"; self._notify(); return
+            packet, response = result
+            self.store.add_message(packet["id"], contact["signing_key"], "out", int(time.time()), text, pending)
+            self._pending_attachments = []
+            self._status = "Delivered to encrypted relay."
+            if response:
+                message = decrypt_message(identity, response, DEMO_CARD)  # type: ignore[arg-type]
+                self.store.add_message(message["id"], DEMO_CARD["signing_key"], "in", message["sent_at"], message["text"], message.get("attachments"))
             self._notify()
-        self.run_job(demo_reply, demo_complete)
+        self.run_job(work, complete)
 
     @Slot(str, str, str, str, str, str)
     def saveProfile(self, display_name: str, custom_status: str, bio: str, pronouns: str, banner_color: str, status_emoji: str):
@@ -499,37 +664,36 @@ class Controller(QObject):
             version = str(release.get("tag_name", "")).lstrip("v")
             if not _version_tuple(version) or _version_tuple(version) <= _version_tuple(__version__):
                 return {"state": "current"}
-            asset = next((item for item in release.get("assets", []) if item.get("name") == UPDATE_ASSET), None)
-            if not asset: raise ValueError(f"Release v{version} has no {UPDATE_ASSET} asset")
+            executable = Path(sys.executable).resolve()
+            installed = bool(getattr(sys, "frozen", False) and (executable.parent / "unins000.exe").is_file())
+            asset_name = _release_asset_name(version, installed)
+            asset = next((item for item in release.get("assets", []) if item.get("name") == asset_name), None)
+            if not asset: raise ValueError(f"Release v{version} has no {asset_name} asset")
             digest = str(asset.get("digest", ""))
             if not digest.startswith("sha256:"):
                 raise ValueError("Release asset has no GitHub SHA-256 digest")
             updates = self.store.root / "updates"; updates.mkdir(parents=True, exist_ok=True)
-            archive = updates / f"secure-tiles-{version}.zip.part"
+            partial = updates / f"{asset_name}.part"
             download = urllib.request.Request(str(asset["browser_download_url"]), headers={"User-Agent": f"SecureTiles/{__version__}"})
             hasher = hashlib.sha256(); size = 0
-            with urllib.request.urlopen(download, timeout=30) as response, archive.open("wb") as output:
+            with urllib.request.urlopen(download, timeout=30) as response, partial.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
                     size += len(chunk)
-                    if size > 250_000_000: raise ValueError("Release download exceeds the size limit")
+                    if size > 300_000_000: raise ValueError("Release download exceeds the size limit")
                     hasher.update(chunk); output.write(chunk)
             if hasher.hexdigest().lower() != digest.split(":", 1)[1].lower():
-                archive.unlink(missing_ok=True); raise ValueError("Downloaded update failed SHA-256 verification")
-            stage = updates / f"v{version}"
-            if stage.exists():
-                import shutil
-                shutil.rmtree(stage)
-            _safe_extract_release(archive, stage); archive.unlink(missing_ok=True)
-            if not (stage / "main.py").is_file() or not (stage / "secure_tiles").is_dir():
-                raise ValueError("Release package is incomplete")
-            return {"state": "ready", "version": version, "stage": str(stage)}
+                partial.unlink(missing_ok=True); raise ValueError("Downloaded update failed SHA-256 verification")
+            stage = updates / asset_name
+            os.replace(partial, stage)
+            mode = "installer" if installed else ("portable" if getattr(sys, "frozen", False) else "portable_launch")
+            return {"state": "ready", "version": version, "stage": str(stage), "mode": mode}
         def complete(result, error):
             self._checking_updates = False
             if error: self._update_status = f"Update check failed: {error}"
             elif result["state"] == "none": self._update_status = "No published releases are available yet."
             elif result["state"] == "current": self._update_status = f"Secure Tiles {__version__} is up to date."
             else:
-                self._update_version, self._update_stage = result["version"], result["stage"]
+                self._update_version, self._update_stage, self._update_mode = result["version"], result["stage"], result["mode"]
                 self._update_status = f"Version {self._update_version} is downloaded and ready."
             self._notify()
         self.run_job(work, complete)
@@ -537,12 +701,36 @@ class Controller(QObject):
     @Slot()
     def restartToUpdate(self):
         if not self._update_stage: return
-        target = Path(__file__).resolve().parents[1]
-        command = [sys.executable, "-m", "secure_tiles.updater", "--stage", self._update_stage,
-                   "--target", str(target), "--pid", str(os.getpid()), "--version", self._update_version]
+        stage = Path(self._update_stage).resolve()
+        updates = stage.parent
+        script = updates / f"apply-v{self._update_version}.ps1"
+        if self._update_mode == "installer":
+            content = """param([int]$ProcessId, [string]$Package)
+Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+Start-Process -FilePath $Package -ArgumentList @('/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS')
+Remove-Item -LiteralPath $PSCommandPath -Force
+"""
+            arguments = [str(os.getpid()), str(stage)]
+        else:
+            target = Path(sys.executable).resolve() if self._update_mode == "portable" else self.store.root / stage.name
+            content = """param([int]$ProcessId, [string]$Package, [string]$Target)
+Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+$moved = $false
+for ($attempt = 0; $attempt -lt 60 -and -not $moved; $attempt++) {
+    try { Move-Item -LiteralPath $Package -Destination $Target -Force -ErrorAction Stop; $moved = $true }
+    catch { Start-Sleep -Milliseconds 500 }
+}
+if (-not $moved) { exit 1 }
+Start-Process -FilePath $Target
+Remove-Item -LiteralPath $PSCommandPath -Force
+"""
+            arguments = [str(os.getpid()), str(stage), str(target)]
+        script.write_text(content, encoding="utf-8")
+        command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                   "-File", str(script), *arguments]
         flags = 0
         if os.name == "nt": flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-        subprocess.Popen(command, cwd=str(target), creationflags=flags, close_fds=True)
+        subprocess.Popen(command, cwd=str(updates), creationflags=flags, close_fds=True)
         self.application.quit()
 
     @Slot(str, bool)
@@ -572,7 +760,7 @@ class Controller(QObject):
                     if not sender: continue
                     try:
                         message = decrypt_message(identity, envelope, sender)
-                        self.store.add_message(message["id"], sender["signing_key"], "in", message["sent_at"], message["text"])
+                        self._store_received_message(message, sender)
                     except CryptoError: pass
             self._notify()
         self.run_job(lambda: self.relay.inbox(identity.encryption_public), complete)

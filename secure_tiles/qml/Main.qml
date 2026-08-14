@@ -17,6 +17,55 @@ ApplicationWindow {
     property bool compactMessages: backend.messageDensity === "Compact"
     property int corner: backend.cornerRadius
 
+    Popup {
+        id: imageViewer
+        property url imageSource: ""
+        property real zoom: 1
+        property real fitZoom: 1
+        function resetZoom() {
+            if (viewerImage.implicitWidth <= 0 || viewerImage.implicitHeight <= 0) return
+            fitZoom = Math.min(1, (imageViewport.width - 48) / viewerImage.implicitWidth,
+                                  (imageViewport.height - 48) / viewerImage.implicitHeight)
+            zoom = Math.max(0.1, fitZoom)
+            imageViewport.contentX = 0; imageViewport.contentY = 0
+        }
+        function showImage(source) { imageSource = source; open(); Qt.callLater(resetZoom) }
+        function changeZoom(factor) { zoom = Math.max(0.1, Math.min(8, zoom * factor)) }
+        anchors.centerIn: Overlay.overlay
+        width: Overlay.overlay ? Overlay.overlay.width : root.width
+        height: Overlay.overlay ? Overlay.overlay.height : root.height
+        padding: 0; modal: true; focus: true; closePolicy: Popup.CloseOnEscape
+        onClosed: imageSource = ""
+        background: Rectangle { color: "#e60a0b0d" }
+        contentItem: Item {
+            AppButton { anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 18; text: "Close"; Layout.preferredWidth: 70; z: 3; onClicked: imageViewer.close() }
+            Flickable {
+                id: imageViewport
+                anchors.fill: parent; anchors.topMargin: 58; anchors.bottomMargin: 64; anchors.leftMargin: 20; anchors.rightMargin: 20
+                clip: true; boundsBehavior: Flickable.StopAtBounds
+                contentWidth: Math.max(width, viewerImage.width); contentHeight: Math.max(height, viewerImage.height)
+                Image {
+                    id: viewerImage; source: imageViewer.imageSource; asynchronous: true; cache: false
+                    width: Math.max(1, implicitWidth * imageViewer.zoom); height: Math.max(1, implicitHeight * imageViewer.zoom)
+                    x: Math.max(0, (imageViewport.width - width) / 2); y: Math.max(0, (imageViewport.height - height) / 2)
+                    fillMode: Image.PreserveAspectFit
+                    onStatusChanged: if (status === Image.Ready) imageViewer.resetZoom()
+                }
+                MouseArea {
+                    anchors.fill: parent; acceptedButtons: Qt.NoButton
+                    onWheel: function(wheel) { imageViewer.changeZoom(wheel.angleDelta.y > 0 ? 1.15 : 1 / 1.15); wheel.accepted = true }
+                }
+            }
+            RowLayout {
+                anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; anchors.bottomMargin: 16; spacing: 7
+                AppButton { text: "Zoom out"; Layout.preferredWidth: 86; onClicked: imageViewer.changeZoom(1 / 1.25) }
+                AppText { text: Math.round(imageViewer.zoom * 100) + "%"; horizontalAlignment: Text.AlignHCenter; Layout.preferredWidth: 56; font.bold: true }
+                AppButton { text: "Zoom in"; Layout.preferredWidth: 78; onClicked: imageViewer.changeZoom(1.25) }
+                AppButton { text: "Fit"; quiet: true; Layout.preferredWidth: 54; onClicked: imageViewer.resetZoom() }
+            }
+        }
+    }
+
     component Panel: Rectangle {
         color: root.c.panel
         radius: root.corner
@@ -344,7 +393,7 @@ ApplicationWindow {
                     id: messageRow
                     required property var modelData
                     width: ListView.view.width
-                    property bool matchesSearch: chatRoot.searchQuery === "" || modelData.plainText.toLowerCase().indexOf(chatRoot.searchQuery) >= 0
+                    property bool matchesSearch: chatRoot.searchQuery === "" || modelData.searchText.indexOf(chatRoot.searchQuery) >= 0
                     visible: matchesSearch
                     height: visible ? messageLayout.implicitHeight + (root.compactMessages ? 8 : 16) + (modelData.showDate ? 30 : 0) : 0
                     color: messageHover.containsMouse ? root.c.tile : "transparent"
@@ -372,6 +421,26 @@ ApplicationWindow {
                                 Item { Layout.fillWidth: true }
                             }
                             Text { Layout.fillWidth: true; text: messageRow.modelData.body; textFormat: Text.RichText; color: root.c.text; font.family: "Segoe UI"; font.pixelSize: Math.round(14 * root.uiScale); wrapMode: Text.Wrap; renderType: Text.NativeRendering }
+                            Repeater {
+                                model: messageRow.modelData.attachments
+                                ColumnLayout {
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true; spacing: 5; Layout.topMargin: 4
+                                    Image {
+                                        id: attachmentPreview; visible: source !== ""; source: modelData.previewUrl
+                                        Layout.preferredWidth: Math.min(320, implicitWidth); Layout.preferredHeight: visible ? Math.min(220, implicitHeight) : 0
+                                        fillMode: Image.PreserveAspectFit; asynchronous: true; cache: false
+                                        MouseArea { anchors.fill: parent; enabled: attachmentPreview.status === Image.Ready; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: imageViewer.showImage(attachmentPreview.source) }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        AppText { text: modelData.name; font.bold: true; elide: Text.ElideMiddle; Layout.maximumWidth: 300 }
+                                        AppText { text: modelData.sizeLabel; color: root.c.muted; font.pixelSize: 10 }
+                                        AppButton { text: modelData.available ? "Save" : "Retry"; quiet: true; Layout.preferredWidth: 52; Layout.preferredHeight: 28; onClicked: backend.saveAttachment(messageRow.modelData.id, index) }
+                                    }
+                                }
+                            }
                         }
                         AppButton { visible: messageHover.containsMouse && messageRow.modelData.plainText !== ""; text: "Copy"; quiet: true; Layout.preferredWidth: 54; Layout.preferredHeight: 30; onClicked: backend.copyText(messageRow.modelData.plainText) }
                     }
@@ -380,19 +449,38 @@ ApplicationWindow {
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
             }
             Panel {
-                Layout.fillWidth: true; Layout.preferredHeight: 116; color: root.c.tile; radius: 10
+                id: composerPanel
+                Layout.fillWidth: true; Layout.preferredHeight: backend.pendingAttachments.length > 0 ? 154 : 116; color: root.c.tile; radius: 10
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 7; spacing: 4
                     RowLayout {
                         spacing: 2
-                        AppButton { text: "B"; quiet: true; font.bold: true; Layout.preferredWidth: 38; onClicked: format("**") }
-                        AppButton { text: "I"; quiet: true; font.italic: true; Layout.preferredWidth: 38; onClicked: format("*") }
-                        AppButton { text: "</>"; quiet: true; Layout.preferredWidth: 44; onClicked: format("`") }
-                        AppButton { text: "Code"; quiet: true; Layout.preferredWidth: 52; onClicked: format("```") }
-                        AppButton { text: "Clear"; quiet: true; onClicked: composer.text = composer.text.replace(/\*\*|```|`|\*/g, "") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "B"; quiet: true; font.bold: true; Layout.preferredWidth: 30; Layout.preferredHeight: 28; onClicked: composerPanel.format("**") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "I"; quiet: true; font.italic: true; Layout.preferredWidth: 30; Layout.preferredHeight: 28; onClicked: composerPanel.format("*") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "</>"; quiet: true; Layout.preferredWidth: 38; Layout.preferredHeight: 28; onClicked: composerPanel.format("`") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "Code"; quiet: true; Layout.preferredWidth: 46; Layout.preferredHeight: 28; onClicked: composerPanel.format("```") }
+                        AppButton { text: "Attach"; quiet: true; Layout.preferredWidth: 58; Layout.preferredHeight: 28; enabled: backend.selectedName !== ""; onClicked: backend.chooseAttachments() }
                         Item { Layout.fillWidth: true }
                         AppText { visible: backend.status !== ""; text: backend.status; color: backend.status.indexOf("WARNING") >= 0 || backend.status.indexOf("Not sent") === 0 ? root.c.danger : root.c.muted; font.pixelSize: 10; elide: Text.ElideRight; Layout.maximumWidth: 280 }
                         AppText { text: composer.length + " / 4000"; color: composer.length > 3800 ? root.c.danger : root.c.muted; font.pixelSize: 10 }
+                    }
+                    RowLayout {
+                        visible: backend.pendingAttachments.length > 0; Layout.fillWidth: true; Layout.preferredHeight: visible ? 32 : 0; spacing: 5
+                        Repeater {
+                            model: backend.pendingAttachments
+                            Rectangle {
+                                required property var modelData
+                                required property int index
+                                Layout.preferredWidth: Math.min(185, attachmentName.implicitWidth + attachmentSize.implicitWidth + 42); Layout.preferredHeight: 30
+                                radius: 7; color: root.c.panel
+                                RowLayout { anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 5; spacing: 5
+                                    AppText { id: attachmentName; Layout.fillWidth: true; text: modelData.name; font.pixelSize: 11; elide: Text.ElideMiddle }
+                                    AppText { id: attachmentSize; text: modelData.sizeLabel; color: root.c.muted; font.pixelSize: 9 }
+                                    AppButton { text: "×"; quiet: true; Layout.preferredWidth: 24; Layout.preferredHeight: 24; onClicked: backend.removeAttachment(index) }
+                                }
+                            }
+                        }
+                        Item { Layout.fillWidth: true }
                     }
                     RowLayout { Layout.fillWidth: true; Layout.fillHeight: true; spacing: 7
                         TextArea {
@@ -406,14 +494,21 @@ ApplicationWindow {
                                 if (shouldSend) { backend.sendMessage(text); text = ""; event.accepted = true }
                             }
                         }
-                        AppButton { text: "Send"; accent: true; Layout.preferredWidth: 88; Layout.fillHeight: true; enabled: backend.selectedName !== "" && composer.length > 0; onClicked: { backend.sendMessage(composer.text); composer.text = "" } }
+                        AppButton { visible: backend.settings.show_send_button === true; text: "Send"; accent: true; Layout.preferredWidth: 68; Layout.fillHeight: true; enabled: backend.selectedName !== "" && (composer.length > 0 || backend.pendingAttachments.length > 0); onClicked: { backend.sendMessage(composer.text); composer.text = "" } }
                     }
                 }
                 function format(marker) {
                     var start = composer.selectionStart, end = composer.selectionEnd
                     var selected = composer.text.substring(start, end)
                     var edge = marker === "```" ? "\n" : ""
-                    composer.remove(start, end); composer.insert(start, marker + edge + selected + edge + marker); composer.forceActiveFocus()
+                    var contentStart = start + marker.length + edge.length
+                    composer.remove(start, end)
+                    composer.insert(start, marker + edge + selected + edge + marker)
+                    composer.forceActiveFocus()
+                    if (selected.length > 0)
+                        composer.select(contentStart, contentStart + selected.length)
+                    else
+                        composer.cursorPosition = contentStart
                 }
             }
         }
@@ -451,19 +546,25 @@ ApplicationWindow {
             spacing: 12
             RowLayout { Layout.fillWidth: true; AppText { text: "Settings"; font.pixelSize: 23; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: "Back to messages"; onClicked: backend.openPage("chat") } }
             RowLayout {
-                Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
+                Layout.fillWidth: true; Layout.fillHeight: true; spacing: 16
                 Panel {
-                    Layout.preferredWidth: 170; Layout.fillHeight: true; color: root.c.bg
+                    Layout.preferredWidth: 170; Layout.fillHeight: true; color: "transparent"; radius: 0
                     ColumnLayout { anchors.fill: parent; anchors.margins: 9; spacing: 4
                         Repeater { model: ["My Profile", "General", "Appearance", "Privacy", "Notifications", "About"]
-                            AppButton { required property string modelData; Layout.fillWidth: true; text: modelData; quiet: backend.settingsTab !== modelData; accent: backend.settingsTab === modelData; onClicked: backend.openSettingsTab(modelData) }
+                            Item {
+                                required property string modelData
+                                Layout.fillWidth: true; Layout.preferredHeight: 38
+                                Rectangle { visible: backend.settingsTab === parent.modelData; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: 3; height: 22; radius: 2; color: root.c.accent }
+                                AppButton { anchors.fill: parent; anchors.leftMargin: 7; text: parent.modelData; quiet: true; textColor: backend.settingsTab === parent.modelData ? root.c.accent : root.c.text; onClicked: backend.openSettingsTab(parent.modelData) }
+                            }
                         }
                         Item { Layout.fillHeight: true }
                     }
                 }
+                Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: root.c.hover; opacity: 0.75 }
                 Panel {
-                    Layout.fillWidth: true; Layout.fillHeight: true; color: root.c.bg
-                    Loader { anchors.fill: parent; anchors.margins: 24; sourceComponent: backend.settingsTab === "My Profile" ? profileSettings : backend.settingsTab === "General" ? generalSettings : backend.settingsTab === "Appearance" ? appearanceSettings : backend.settingsTab === "Privacy" ? privacySettings : backend.settingsTab === "Notifications" ? notificationSettings : aboutSettings }
+                    Layout.fillWidth: true; Layout.fillHeight: true; color: "transparent"; radius: 0
+                    Loader { anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 12; anchors.topMargin: 18; anchors.bottomMargin: 18; sourceComponent: backend.settingsTab === "My Profile" ? profileSettings : backend.settingsTab === "General" ? generalSettings : backend.settingsTab === "Appearance" ? appearanceSettings : backend.settingsTab === "Privacy" ? privacySettings : backend.settingsTab === "Notifications" ? notificationSettings : aboutSettings }
                 }
             }
         }
@@ -508,15 +609,21 @@ ApplicationWindow {
           ColumnLayout { id: appearanceColumn; width: parent.width
             AppText { text: "Appearance"; font.pixelSize: 19; font.bold: true }
             AppText { text: "Choose a dark theme. Your selection is remembered on this device."; color: root.c.muted }
+            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.c.hover; Layout.topMargin: 5; Layout.bottomMargin: 8 }
+            SectionLabel { text: "THEME" }
             GridLayout { Layout.fillWidth: true; columns: width > 500 ? 3 : 2; columnSpacing: 7; rowSpacing: 7
               Repeater { model: backend.themeOptions
                 AppButton { required property var modelData; Layout.fillWidth: true; text: "●   " + modelData.name; textColor: modelData.accent; selected: backend.themeName === modelData.name; onClicked: backend.setTheme(modelData.name) }
               }
             }
             AppButton { text: "Choose custom accent"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomAccent() }
+            SectionLabel { text: "EDITOR & INTERACTION"; Layout.topMargin: 12 }
             SettingToggle { title: "Interface motion"; description: "Enable short visual transitions and hover feedback."; settingKey: "animations"; checked: backend.animationsEnabled }
             SettingToggle { title: "Enter to send"; description: backend.enterToSend ? "Enter sends; Shift+Enter adds a new line." : "Ctrl+Enter sends; Enter adds a new line."; settingKey: "enter_to_send"; checked: backend.enterToSend }
-            AppText { text: "MESSAGE DENSITY"; color: root.c.muted; font.pixelSize: 10; font.bold: true; Layout.topMargin: 5 }
+            SettingToggle { title: "Show Send button"; description: "Display a Send button beside the message editor."; settingKey: "show_send_button"; checked: backend.settings.show_send_button === true }
+            SettingToggle { title: "Show formatting buttons"; description: "Display bold, italic, inline code, and code block controls."; settingKey: "show_formatting_buttons"; checked: backend.settings.show_formatting_buttons === true }
+            SectionLabel { text: "LAYOUT"; Layout.topMargin: 12 }
+            AppText { text: "MESSAGE DENSITY"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
             RowLayout {
                 AppButton { text: "Cozy"; accent: backend.messageDensity === "Cozy"; onClicked: backend.setMessageDensity("Cozy") }
                 AppButton { text: "Compact"; accent: backend.messageDensity === "Compact"; onClicked: backend.setMessageDensity("Compact") }
@@ -550,13 +657,42 @@ ApplicationWindow {
         Item { Layout.fillHeight: true }
     } }
 
+    component SectionLabel: AppText {
+        Layout.fillWidth: true
+        color: root.c.accent
+        font.pixelSize: 10
+        font.bold: true
+        font.letterSpacing: 0.7
+    }
+
     component SettingToggle: Rectangle {
         id: setting; property string title; property string description; property string settingKey; property bool checked
-        Layout.fillWidth: true; Layout.preferredHeight: 66; radius: 10; color: root.c.tile
-        RowLayout { anchors.fill: parent; anchors.margins: 12
-            ColumnLayout { Layout.fillWidth: true; spacing: 2; AppText { text: setting.title; font.bold: true } AppText { text: setting.description; color: root.c.muted; font.pixelSize: 11 } }
-            Switch { checked: setting.checked; onToggled: backend.setPreference(setting.settingKey, checked) }
+        readonly property color stateColor: checked ? "#22c55e" : "#ef4444"
+        Layout.fillWidth: true; Layout.preferredHeight: 68; radius: Math.max(6, root.corner - 2)
+        color: settingArea.containsMouse ? root.c.tile : "transparent"
+        Behavior on color { ColorAnimation { duration: root.motion } }
+        RowLayout {
+            anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 16
+            ColumnLayout {
+                Layout.fillWidth: true; spacing: 3
+                AppText { text: setting.title; font.pixelSize: 14; font.bold: true }
+                AppText { Layout.fillWidth: true; text: setting.description; color: root.c.muted; font.pixelSize: 11; elide: Text.ElideRight }
+            }
+            AppText { text: setting.checked ? "ON" : "OFF"; color: setting.stateColor; font.pixelSize: 10; font.bold: true }
+            Rectangle {
+                Layout.preferredWidth: 54; Layout.preferredHeight: 30; radius: 15
+                color: setting.stateColor
+                Behavior on color { ColorAnimation { duration: root.motion } }
+                Rectangle {
+                    width: 22; height: 22; radius: 11; y: 4
+                    x: setting.checked ? parent.width - width - 4 : 4
+                    color: "#ffffff"
+                    Behavior on x { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
+                }
+            }
         }
+        Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.c.hover; opacity: 0.7 }
+        MouseArea { id: settingArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: backend.setPreference(setting.settingKey, !setting.checked) }
     }
 
     Component { id: privacySettings; ColumnLayout {

@@ -24,7 +24,8 @@ class RelayClient:
             headers={"Content-Type": "application/json", "User-Agent": "SecureTiles/0.2"},
         )
         try:
-            with urllib.request.urlopen(request, timeout=8) as response:
+            timeout = 120 if "/attachments/" in path or (data and len(data) > 1_000_000) else 8
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             try:
@@ -46,6 +47,22 @@ class RelayClient:
 
     def send(self, envelope: dict[str, Any]) -> None:
         self._request("POST", "/v1/messages", envelope)
+
+    def begin_attachment(self, attachment_id: str, token: str, recipient: str, total_size: int, chunks: int) -> None:
+        self._request("POST", f"/v1/attachments/{attachment_id}/begin",
+                      {"token": token, "recipient": recipient, "total_size": total_size, "chunks": chunks})
+
+    def attachment_status(self, attachment_id: str, token: str) -> set[int]:
+        result = self._request("POST", f"/v1/attachments/{attachment_id}/status", {"token": token})
+        return {int(index) for index in result.get("received", [])}
+
+    def upload_attachment_chunk(self, attachment_id: str, token: str, index: int, data: str) -> None:
+        self._request("POST", f"/v1/attachments/{attachment_id}/chunk",
+                      {"token": token, "index": index, "data": data})
+
+    def download_attachment_chunk(self, attachment_id: str, token: str, index: int) -> str:
+        return str(self._request("POST", f"/v1/attachments/{attachment_id}/download",
+                                 {"token": token, "index": index})["data"])
 
     def inbox(self, encryption_key: str) -> list[dict[str, Any]]:
         key = urllib.parse.quote(encryption_key, safe="")

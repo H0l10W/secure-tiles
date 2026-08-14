@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements-build.txt
       - name: Run tests
         run: python -m unittest discover -v
 
@@ -25,6 +25,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install build dependencies
+        run: |
+          python -m pip install -r requirements-build.txt
+          choco install innosetup --no-progress -y
       - name: Read application version
         id: version
         shell: pwsh
@@ -33,13 +40,9 @@ jobs:
           $match = [regex]::Match($content, '__version__\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"')
           if (-not $match.Success) { throw 'Could not read application version' }
           "version=$($match.Groups[1].Value)" >> $env:GITHUB_OUTPUT
-      - name: Package source release
+      - name: Build Windows release
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path release | Out-Null
-          Copy-Item main.py,relay_server.py,requirements.txt,README.md -Destination release
-          Copy-Item secure_tiles,assets -Destination release -Recurse
-          Compress-Archive -Path release/* -DestinationPath secure-tiles-windows.zip -CompressionLevel Optimal
+        run: .\tools\build_release.ps1 -Version "${{ steps.version.outputs.version }}"
       - name: Publish versioned release
         shell: pwsh
         env:
@@ -49,5 +52,9 @@ jobs:
           if (gh release view $tag 2>$null) {
             Write-Host "$tag already exists; bump secure_tiles/__init__.py for a new release."
           } else {
-            gh release create $tag secure-tiles-windows.zip --title "Secure Tiles $tag" --generate-notes --target $env:GITHUB_SHA
+            gh release create $tag `
+              "dist/Secure-Tiles-Setup-v${{ steps.version.outputs.version }}.exe" `
+              "dist/Secure-Tiles-Portable-v${{ steps.version.outputs.version }}.exe" `
+              "CHANGELOG.md" `
+              --title "Secure Tiles $tag" --generate-notes --target $env:GITHUB_SHA
           }
