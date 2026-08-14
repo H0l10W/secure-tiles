@@ -2,6 +2,12 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.2.2 - 2026-08-14
+
+- Fixed existing accounts sometimes being absent from the hosted username directory after upgrading.
+- Added safe public-identity registration on every successful unlock so directory entries repair themselves automatically.
+- Separated contact initials into compact avatar circles so they no longer appear to be part of usernames.
+
 ## 0.2.1 - 2026-08-14
 
 - Added an always-online Cloudflare Worker relay that connects automatically on first launch.

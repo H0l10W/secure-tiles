@@ -273,10 +273,31 @@ ApplicationWindow {
                                 model: backend.contacts
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
                                 delegate: AppButton {
+                                    id: contactButton
                                     required property var modelData
                                     width: ListView.view.width; height: 44
-                                    text: backend.sidebarExpanded ? (modelData.favorite ? "★   " : modelData.initials + "   ") + modelData.displayName : (modelData.favorite ? "★" : modelData.initials)
                                     accent: backend.selectedSigningKey === modelData.signing_key
+                                    leftPadding: 8; rightPadding: 10
+                                    contentItem: RowLayout {
+                                        spacing: 9
+                                        Rectangle {
+                                            Layout.preferredWidth: 28; Layout.preferredHeight: 28; radius: 14
+                                            color: contactButton.accent ? root.c.bg : root.c.hover
+                                            AppText {
+                                                anchors.centerIn: parent
+                                                text: modelData.favorite ? "★" : modelData.initials
+                                                color: contactButton.accent ? root.c.accent : root.c.text
+                                                font.pixelSize: 10; font.bold: true
+                                            }
+                                        }
+                                        AppText {
+                                            visible: backend.sidebarExpanded
+                                            Layout.fillWidth: true
+                                            text: modelData.displayName
+                                            color: contactButton.textColor; font.pixelSize: 12; font.bold: true
+                                            elide: Text.ElideRight
+                                        }
+                                    }
                                     onClicked: backend.selectContact(modelData.signing_key)
                                 }
                             }

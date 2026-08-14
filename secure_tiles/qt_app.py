@@ -429,15 +429,14 @@ class Controller(QObject):
         else:
             self.identity = identity
             self.relay = RelayClient(self.relay_url)
-            if not self._migrate_relay:
-                self._enter_messenger(); return
             self._status = "Connecting your account to the hosted relay..."; self._busy = True; self._notify()
             def complete(_result, error):
                 self._busy = False
                 if error:
                     self.identity = None; self._status = str(error); self._notify(); return
-                self.vault = dict(self.vault or {}); self.vault["relay"] = self.relay_url
-                self.store.save_vault(self.vault); self._migrate_relay = False
+                if self._migrate_relay:
+                    self.vault = dict(self.vault or {}); self.vault["relay"] = self.relay_url
+                    self.store.save_vault(self.vault); self._migrate_relay = False
                 self._enter_messenger()
             self.run_job(lambda: self.relay.register(public_card(identity, str((self.vault or {})["name"]))), complete)
 
