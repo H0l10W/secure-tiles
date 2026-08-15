@@ -33,6 +33,7 @@ class UpdaterTests(unittest.TestCase):
             self.assertIn("$ParentProcessId", script)
             self.assertNotIn("$ProcessId", script)
             self.assertIn("Start-Process -FilePath $Target", script)
+            self.assertIn("SetEnvironmentVariable('PYINSTALLER_RESET_ENVIRONMENT', '1', 'Process')", script)
         self.assertIn("-Wait -PassThru", _update_apply_script("installer"))
 
     @unittest.skipUnless(os.name == "nt", "PowerShell updater test requires Windows")
@@ -49,7 +50,7 @@ class UpdaterTests(unittest.TestCase):
             if marker.exists(): break
             time.sleep(.1)
         self.assertTrue(marker.exists())
-        self.assertIn("updated", target.read_text(encoding="utf-8"))
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "updated")
 
     @unittest.skipUnless(os.name == "nt", "Detached updater test requires Windows")
     def test_update_helper_survives_launcher_exit(self):
@@ -71,6 +72,7 @@ class UpdaterTests(unittest.TestCase):
             if marker.exists(): break
             time.sleep(.1)
         self.assertTrue(marker.exists())
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "detached")
 
     def test_release_extraction_rejects_path_traversal(self):
         root = self.fixture()

@@ -2,6 +2,16 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.4.0 - 2026-08-15
+
+- Added early-development servers with server creation, invite joining, server discovery, and dedicated server navigation.
+- Added text and voice channel management, channel topics, encrypted server messaging, and member-aware message delivery.
+- Added configurable roles and permissions, member role assignment, server profiles, and server administration controls.
+- Added signed, time-limited, replay-resistant server actions across the local relay and Cloudflare relay implementations.
+- Added persistent server, channel, role, invite, membership, and server-message storage with expanded protocol and relay tests.
+- Refined the application interface to support server lists, channel views, member lists, server settings, and server-specific conversation states.
+- Server features are still early in development and may change significantly in future releases.
+
 ## 0.3.7 - 2026-08-15
 
 - Added dedicated People and Favorites sidebar tabs with a finished empty-favorites state.

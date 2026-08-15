@@ -35,6 +35,7 @@ from .crypto import (
 )
 from .relay import RelayClient
 from .store import Store
+from .servers import PERMISSIONS, new_server_id, sign_server_action
 from . import __version__
 
 
@@ -73,6 +74,8 @@ ATTACHMENT_CHUNK_SIZE = 1024 * 1024
 TYPING_SIGNAL_PREFIX = "\0secure-tiles-typing:"
 PRESENCE_SIGNAL_PREFIX = "\0secure-tiles-presence:"
 PROFILE_SIGNAL_PREFIX = "\0secure-tiles-profile:"
+SERVER_MESSAGE_PREFIX = "\0secure-tiles-server:"
+SERVER_INVITE_PREFIX = "\0secure-tiles-invite:"
 DISPLAY_FONTS = ("Segoe UI", "Bahnschrift", "Georgia", "Trebuchet MS", "Consolas")
 DISPLAY_FONT_OPTIONS = (
     {"name": "Modern", "family": "Segoe UI"},
@@ -120,6 +123,7 @@ try {
     for ($attempt = 0; $attempt -lt 120 -and -not (Test-Path -LiteralPath $Target); $attempt++) { Start-Sleep -Milliseconds 500 }
     if (-not (Test-Path -LiteralPath $Target)) { throw "Installed executable was not found at $Target" }
     Write-UpdateLog "Relaunching $Target"
+    [Environment]::SetEnvironmentVariable('PYINSTALLER_RESET_ENVIRONMENT', '1', 'Process')
     Start-Process -FilePath $Target -WorkingDirectory (Split-Path -Parent $Target)
     Remove-Item -LiteralPath $Package -Force -ErrorAction SilentlyContinue
     Write-UpdateLog 'Update completed'
@@ -142,6 +146,7 @@ try {
     }
     if (-not $moved) { throw "Could not replace $Target" }
     Write-UpdateLog "Relaunching $Target"
+    [Environment]::SetEnvironmentVariable('PYINSTALLER_RESET_ENVIRONMENT', '1', 'Process')
     Start-Process -FilePath $Target -WorkingDirectory (Split-Path -Parent $Target)
     Write-UpdateLog 'Update completed'
     Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
@@ -235,6 +240,12 @@ class Controller(QObject):
             str(key): max(0, int(value)) for key, value in stored_unread.items()
         } if isinstance(stored_unread, dict) else {}
         self._sidebar_expanded = bool(self.preferences.get("sidebar_expanded", True)) if bool(self.preferences.get("remember_sidebar", True)) else True
+        self._sidebar_width = max(230, min(420, int(self.preferences.get("sidebar_width", 276))))
+        self._server_channel_width = max(180, min(360, int(self.preferences.get("server_channel_width", 220))))
+        self._server_member_width = max(190, min(360, int(self.preferences.get("server_member_width", 240))))
+        self._servers: list[dict[str, Any]] = []
+        self._selected_server_id = ""
+        self._selected_channel_id = ""
         self.jobFinished.connect(self._finish_job)
         self.transferProgress.connect(self._set_transfer_status)
         if bool(self.preferences.get("auto_start_relay", True)):
@@ -285,6 +296,15 @@ class Controller(QObject):
     @Property(bool, notify=changed)
     def sidebarExpanded(self): return self._sidebar_expanded
 
+    @Property(int, notify=changed)
+    def sidebarWidth(self): return self._sidebar_width
+
+    @Property(int, notify=changed)
+    def serverChannelWidth(self): return self._server_channel_width
+
+    @Property(int, notify=changed)
+    def serverMemberWidth(self): return self._server_member_width
+
     @Property('QVariantMap', notify=changed)
     def colors(self):
         name = str(self.preferences.get("theme", "Midnight"))
@@ -321,6 +341,88 @@ class Controller(QObject):
 
     @Property('QVariantList', notify=changed)
     def favoriteContacts(self): return [card for card in self.contacts if card["favorite"]]
+
+    @Property('QVariantList', notify=changed)
+    def invitableContacts(self): return [card for card in self.contacts if card["signing_key"] != DEMO_CARD["signing_key"]]
+
+    @Property('QVariantList', notify=changed)
+    def receivedServerInvites(self):
+        now = int(time.time()); values = self.preferences.get("received_server_invites", [])
+        return [item for item in values if isinstance(item, dict) and (not int(item.get("expires", 0)) or int(item["expires"]) >= now)]
+
+    @Property('QVariantList', notify=changed)
+    def servers(self): return self._servers
+
+    @Property('QVariantList', notify=changed)
+    def serverRailItems(self):
+        layout = self.preferences.get("server_layout", [])
+        known = {server["id"]: server for server in self._servers}; result, placed = [], set()
+        if isinstance(layout, list):
+            for item in layout:
+                if not isinstance(item, dict): continue
+                if item.get("type") == "folder":
+                    children = [known[value] for value in item.get("servers", []) if value in known and value not in placed]
+                    if children:
+                        folder_id = str(item.get("id", ""))
+                        result.append({"type": "folder", "id": folder_id, "name": str(item.get("name", "Folder")), "color": str(item.get("color", "#5865f2")), "icon": str(item.get("icon", "")), "servers": children,
+                                       "expanded": folder_id in self.preferences.get("expanded_server_folders", [])})
+                        placed.update(server["id"] for server in children)
+                elif item.get("id") in known and item["id"] not in placed:
+                    result.append({"type": "server", **known[item["id"]]}); placed.add(item["id"])
+        result.extend({"type": "server", **server} for server in self._servers if server["id"] not in placed)
+        return result
+
+    @Property('QVariantList', constant=True)
+    def serverPermissions(self): return list(PERMISSIONS)
+
+    @Property(str, notify=changed)
+    def selectedServerId(self): return self._selected_server_id
+
+    @Property('QVariantMap', notify=changed)
+    def selectedServer(self): return next((server for server in self._servers if server["id"] == self._selected_server_id), {})
+
+    @Property(bool, notify=changed)
+    def selectedServerOwned(self): return bool(self.identity and self.selectedServer.get("owner_key") == self.identity.signing_public)
+
+    @Property(str, notify=changed)
+    def selectedChannelId(self): return self._selected_channel_id
+
+    @Property('QVariantMap', notify=changed)
+    def selectedChannel(self):
+        return next((channel for channel in self.selectedServer.get("channels", []) if channel["id"] == self._selected_channel_id), {})
+
+    @Property('QVariantList', notify=changed)
+    def serverMessages(self):
+        if not self._selected_server_id or not self._selected_channel_id: return []
+        members = {member["signing_key"]: member for member in self.selectedServer.get("members", [])}
+        result = []
+        for row in self.store.server_messages(self._selected_server_id, self._selected_channel_id):
+            card = members.get(row["sender_key"], {}).get("card", {})
+            name = self.displayName if row["direction"] == "out" else card.get("name", "Member")
+            result.append({"id": row["id"], "sender": name, "text": row["plaintext"],
+                           "outgoing": row["direction"] == "out",
+                           "timestamp": datetime.fromtimestamp(row["sent_at"]).strftime("%H:%M")})
+        return result
+
+    @Property('QVariantList', notify=changed)
+    def serverMemberGroups(self):
+        server = self.selectedServer
+        roles = sorted(server.get("roles", []), key=lambda role: int(role.get("position", 0)))
+        role_by_id = {role["id"]: role for role in roles}
+        grouped: dict[str, list[dict[str, Any]]] = {role["id"]: [] for role in roles}; offline = []
+        for member in server.get("members", []):
+            card = member.get("card", {}); signing_key = str(member.get("signing_key", ""))
+            status = "Online" if self.identity and signing_key == self.identity.signing_public else self._presence_contacts.get(signing_key, "Offline")
+            remote = self._remote_profiles.get(signing_key, {})
+            value = {"signing_key": signing_key, "name": str(remote.get("display_name", "")).strip() or card.get("name", "Member"),
+                     "username": card.get("name", "member"), "status": status, "initials": str(card.get("name", "M"))[:2].upper()}
+            if status == "Offline": offline.append(value); continue
+            role_id = next((value for value in member.get("roles", []) if value in role_by_id), "member")
+            grouped.setdefault(role_id, []).append(value)
+        result = [{"id": role["id"], "name": role["name"], "color": role.get("color", self.colors["muted"]), "members": grouped[role["id"]]}
+                  for role in roles if grouped.get(role["id"])]
+        if offline: result.append({"id": "offline", "name": "Offline", "color": self.colors["muted"], "members": offline})
+        return result
 
     @Property(str, notify=changed)
     def selectedName(self): return self._selected["name"] if self._selected else ""
@@ -436,6 +538,25 @@ class Controller(QObject):
 
     def _store_received_message(self, message: dict[str, Any], sender: dict[str, str]) -> None:
         text = str(message.get("text", ""))
+        if text.startswith(SERVER_MESSAGE_PREFIX):
+            try:
+                payload = json.loads(text.removeprefix(SERVER_MESSAGE_PREFIX))
+                server_id, channel_id = str(payload["server_id"]), str(payload["channel_id"])
+                if any(server["id"] == server_id and any(channel["id"] == channel_id for channel in server.get("channels", [])) for server in self._servers):
+                    self.store.add_server_message(message["id"], server_id, channel_id, sender["signing_key"], "in", message["sent_at"], str(payload["text"])[:4000])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError): pass
+            self._notify(); return
+        if text.startswith(SERVER_INVITE_PREFIX):
+            try:
+                invite = json.loads(text.removeprefix(SERVER_INVITE_PREFIX))
+                if re.fullmatch(r"[0-9a-f]{32}", str(invite.get("server_id", ""))) and re.fullmatch(r"[A-Za-z0-9_-]{4,32}", str(invite.get("code", ""))):
+                    values = list(self.preferences.get("received_server_invites", []))
+                    values = [item for item in values if not (item.get("server_id") == invite["server_id"] and item.get("code") == invite["code"])]
+                    values.append({"server_id": invite["server_id"], "code": invite["code"], "server_name": str(invite.get("server_name", "Server"))[:48], "from": sender["name"], "expires": int(invite.get("expires", 0))})
+                    self.preferences["received_server_invites"] = values[-30:]; self.store.save_preferences(self.preferences)
+                    self._status = f"@{sender['name']} invited you to {invite.get('server_name', 'a server')}."
+            except (TypeError, ValueError, json.JSONDecodeError): pass
+            self._notify(); return
         if text.startswith(PROFILE_SIGNAL_PREFIX):
             try:
                 profile = json.loads(text.removeprefix(PROFILE_SIGNAL_PREFIX))
@@ -676,10 +797,256 @@ class Controller(QObject):
         self.store.add_contact(DEMO_CARD)
         self._remote_profiles[DEMO_CARD["signing_key"]] = dict(DEMO_PROFILE)
         self._page = "chat"; self._status = ""; self._relay_status = "Connecting..."
-        self.poll_timer.start(); self.presence_timer.start(); self.poll_inbox(); self._publish_presence(); self._notify()
+        self.poll_timer.start(); self.presence_timer.start(); self.poll_inbox(); self._publish_presence(); self.refreshServers(); self._notify()
 
     @Slot(str)
     def openPage(self, page: str): self._page = page; self._notify()
+
+    @Slot()
+    def refreshServers(self):
+        if not self.identity: return
+        self.run_job(lambda: self.relay.servers(self.identity.signing_public),
+                     lambda result, error: self._finish_servers(result, error))
+
+    def _finish_servers(self, result, error):
+        if error: self._status = f"Could not refresh servers: {error}"; self._notify(); return
+        self._servers = list(result or [])
+        if self._selected_server_id and not any(server["id"] == self._selected_server_id for server in self._servers): self._selected_server_id = ""
+        if self._selected_server_id:
+            channels = self.selectedServer.get("channels", [])
+            if not any(channel["id"] == self._selected_channel_id for channel in channels):
+                self._selected_channel_id = next((channel["id"] for channel in channels if channel.get("type") == "text"), "")
+        self._notify()
+
+    def _server_action(self, action: str, server_id: str, payload: dict[str, Any], success: str):
+        if not self.identity: return
+        signed = sign_server_action(self.identity, action, server_id, payload)
+        def complete(result, error):
+            if error: self._status = str(error)
+            else:
+                server = dict(result); self._servers = [item for item in self._servers if item["id"] != server["id"]] + [server]
+                self._selected_server_id = server["id"]; self._page = "server"; self._status = success
+            self._notify()
+        self.run_job(lambda: self.relay.server_action(signed), complete)
+
+    @Slot(str)
+    def createServer(self, name: str):
+        if not self.identity: return
+        self._server_action("server.create", new_server_id(), {"name": name, "owner_card": public_card(self.identity, self.username), "accent": self.colors["accent"]}, "Server created.")
+
+    @Slot(str, str)
+    def joinServer(self, server_id: str, code: str):
+        if not self.identity: return
+        self._server_action("invite.redeem", server_id.strip(), {"code": code.strip(), "member_card": public_card(self.identity, self.username)}, "Server joined.")
+
+    @Slot(str, str)
+    def acceptServerInvite(self, server_id: str, code: str):
+        values = [item for item in self.preferences.get("received_server_invites", []) if not (item.get("server_id") == server_id and item.get("code") == code)]
+        self.preferences["received_server_invites"] = values; self.store.save_preferences(self.preferences)
+        self.joinServer(server_id, code)
+
+    @Slot(str)
+    def selectServer(self, server_id: str):
+        self._selected_server_id = server_id; self._page = "server"
+        self._selected_channel_id = next((channel["id"] for channel in self.selectedServer.get("channels", []) if channel.get("type") == "text"), "")
+        self._notify()
+
+    @Slot(str)
+    def selectServerChannel(self, channel_id: str): self._selected_channel_id = channel_id; self._notify()
+
+    @Slot(str)
+    def sendServerMessage(self, text: str):
+        text = text.strip()
+        if not self.identity or not self._selected_server_id or not self._selected_channel_id or not text or self._sending: return
+        if len(text) > 4000: self._status = "Messages are limited to 4,000 characters."; self._notify(); return
+        server, identity, channel_id = dict(self.selectedServer), self.identity, self._selected_channel_id
+        body = SERVER_MESSAGE_PREFIX + json.dumps({"server_id": self._selected_server_id, "channel_id": channel_id, "text": text}, separators=(",", ":"))
+        recipients = [member["card"] for member in server.get("members", []) if member["signing_key"] != identity.signing_public]
+        local_id, sent_at = uuid.uuid4().hex, int(time.time())
+        self._sending = True; self._status = "Sending encrypted channel message..."; self._notify()
+        def work():
+            packets = [encrypt_message(identity, recipient, body) for recipient in recipients]
+            signed = sign_server_action(identity, "message.send", server["id"], {"channel_id": channel_id, "packets": packets})
+            self.relay.send_server_message(signed)
+        def complete(_result, error):
+            self._sending = False
+            if error: self._status = f"Not sent: {error}"
+            else:
+                self.store.add_server_message(local_id, server["id"], channel_id, identity.signing_public, "out", sent_at, text)
+                self._status = "Delivered to encrypted server channel."
+            self._notify()
+        self.run_job(work, complete)
+
+    @Slot(str)
+    def createServerChannel(self, name: str):
+        if self._selected_server_id: self._server_action("channel.create", self._selected_server_id, {"name": name, "type": "text"}, "Channel created.")
+
+    @Slot()
+    def createServerInvite(self):
+        self.createServerInviteWithOptions(self.newInviteCode(), "Forever", [])
+
+    @Slot(result=str)
+    def newInviteCode(self): return uuid.uuid4().hex[:16]
+
+    @Slot(str, str, 'QVariantList')
+    def createServerInviteWithOptions(self, requested_code: str, expiry: str, recipients):
+        if not self.identity or not self._selected_server_id: return
+        code = requested_code.strip() or self.newInviteCode()
+        seconds = {"1 day": 86400, "7 days": 7 * 86400, "Forever": 0}.get(expiry, 86400)
+        expires = 0 if seconds == 0 else int(time.time()) + seconds
+        server, identity = dict(self.selectedServer), self.identity
+        signed = sign_server_action(identity, "invite.create", server["id"], {"code": code, "role_id": "member", "uses": -1, "expires": expires})
+        selected = set(map(str, recipients)); contacts = [card for card in self.store.contacts() if card["signing_key"] in selected and card["signing_key"] != DEMO_CARD["signing_key"]]
+        def work():
+            updated = self.relay.server_action(signed)
+            signal = SERVER_INVITE_PREFIX + json.dumps({"server_id": server["id"], "server_name": server["name"], "code": code, "expires": expires}, separators=(",", ":"))
+            for contact in contacts: self.relay.send(encrypt_message(identity, contact, signal))
+            return updated
+        def complete(result, error):
+            if error: self._status = f"Invite was not created: {error}"
+            else:
+                updated = dict(result); self._servers = [item for item in self._servers if item["id"] != updated["id"]] + [updated]
+                self._status = f"Invite code: {code}" + (f" — sent to {len(contacts)} contact{'s' if len(contacts) != 1 else ''}." if contacts else ".")
+            self._notify()
+        self.run_job(work, complete)
+
+    @Slot(str, str)
+    def updateServer(self, name: str, accent: str):
+        if self._selected_server_id: self._server_action("server.update", self._selected_server_id, {"name": name, "accent": accent, "icon": self.selectedServer.get("icon", "")}, "Server settings saved.")
+
+    @Slot()
+    def chooseServerIcon(self):
+        self.chooseServerIconFor(self._selected_server_id)
+
+    @Slot(str)
+    def chooseServerIconFor(self, server_id: str):
+        server = next((item for item in self._servers if item["id"] == server_id), None)
+        if not server: return
+        filename, _ = QFileDialog.getOpenFileName(None, "Choose server icon", "", "Images (*.png *.jpg *.jpeg *.webp)")
+        if not filename: return
+        icon = _profile_image_data(Path(filename))
+        if not icon: self._status = "Could not read that server icon."; self._notify(); return
+        self._server_action("server.update", server["id"], {"name": server["name"], "accent": server.get("accent", self.colors["accent"]), "icon": icon}, "Server icon saved.")
+
+    @Slot(str)
+    def removeServerIcon(self, server_id: str):
+        server = next((item for item in self._servers if item["id"] == server_id), None)
+        if server: self._server_action("server.update", server["id"], {"name": server["name"], "accent": server.get("accent", self.colors["accent"]), "icon": ""}, "Server icon removed.")
+
+    @Slot(str)
+    def chooseServerFolderIcon(self, folder_id: str):
+        filename, _ = QFileDialog.getOpenFileName(None, "Choose folder icon", "", "Images (*.png *.jpg *.jpeg *.webp)")
+        if not filename: return
+        icon = _profile_image_data(Path(filename))
+        if not icon: self._status = "Could not read that folder icon."; self._notify(); return
+        layout = self.preferences.get("server_layout", [])
+        for item in layout:
+            if isinstance(item, dict) and item.get("type") == "folder" and item.get("id") == folder_id: item["icon"] = icon
+        self._save_preferences(server_layout=layout)
+
+    @Slot(str)
+    def removeServerFolderIcon(self, folder_id: str):
+        layout = self.preferences.get("server_layout", [])
+        for item in layout:
+            if isinstance(item, dict) and item.get("type") == "folder" and item.get("id") == folder_id: item["icon"] = ""
+        self._save_preferences(server_layout=layout)
+
+    @Slot()
+    def deleteServer(self):
+        if not self.identity or not self._selected_server_id: return
+        server_id = self._selected_server_id
+        signed = sign_server_action(self.identity, "server.delete", server_id, {})
+        def complete(_result, error):
+            if error: self._status = f"Server was not deleted: {error}"
+            else:
+                self._servers = [server for server in self._servers if server["id"] != server_id]
+                self._selected_server_id = ""; self._selected_channel_id = ""; self._page = "chat"
+                layout = []
+                for item in self.preferences.get("server_layout", []):
+                    if not isinstance(item, dict): continue
+                    if item.get("type") == "folder":
+                        item = {**item, "servers": [value for value in item.get("servers", []) if value != server_id]}
+                        if item["servers"]: layout.append(item)
+                    elif item.get("id") != server_id: layout.append(item)
+                self.preferences["server_layout"] = layout; self.store.save_preferences(self.preferences)
+                self._status = "Server deleted."
+            self._notify()
+        self.run_job(lambda: self.relay.server_action(signed), complete)
+
+    @Slot(str, str, 'QVariantList')
+    def createServerRole(self, name: str, color: str, permissions):
+        if self._selected_server_id: self._server_action("role.create", self._selected_server_id, {"name": name, "color": color, "permissions": list(permissions)}, "Role created.")
+
+    @Slot(str, str)
+    def renameServerRole(self, role_id: str, name: str):
+        role = next((item for item in self.selectedServer.get("roles", []) if item["id"] == role_id), None)
+        if role and name.strip(): self._server_action("role.update", self._selected_server_id, {"role_id": role_id, "name": name.strip(), "color": role.get("color", "#94a3b8"), "permissions": role.get("permissions", [])}, "Role renamed.")
+
+    @Slot(str, 'QVariantList')
+    def setServerMemberRoles(self, member: str, roles):
+        if self._selected_server_id: self._server_action("member.roles", self._selected_server_id, {"member": member, "roles": list(roles)}, "Member roles updated.")
+
+    @Slot(str, str)
+    def moveServer(self, source_id: str, target_id: str):
+        if source_id == target_id: return
+        layout = [dict(item) for item in self.preferences.get("server_layout", []) if isinstance(item, dict)]
+        placed = {item.get("id") for item in layout if item.get("type") == "server"} | {value for item in layout if item.get("type") == "folder" for value in item.get("servers", [])}
+        layout.extend({"type": "server", "id": server["id"]} for server in self._servers if server["id"] not in placed)
+        layout = [{**item, "servers": [value for value in item.get("servers", []) if value != source_id]} if item.get("type") == "folder" else item for item in layout if not (item.get("type") == "server" and item.get("id") == source_id)]
+        target_index = next((index for index, item in enumerate(layout) if item.get("id") == target_id or target_id in item.get("servers", [])), len(layout))
+        target = layout[target_index] if target_index < len(layout) else None
+        if target and target.get("type") == "folder": target["servers"].append(source_id)
+        elif target:
+            layout[target_index] = {"type": "folder", "id": uuid.uuid4().hex, "name": "Server folder", "color": self.colors["accent"], "servers": [target_id, source_id]}
+        else: layout.append({"type": "server", "id": source_id})
+        self._save_preferences(server_layout=[item for item in layout if item.get("type") != "folder" or item.get("servers")])
+
+    @Slot(str, str, bool)
+    def reorderServer(self, source_id: str, target_id: str, before: bool):
+        if source_id == target_id: return
+        layout = [dict(item) for item in self.preferences.get("server_layout", []) if isinstance(item, dict)]
+        placed = {item.get("id") for item in layout if item.get("type") == "server"} | {value for item in layout if item.get("type") == "folder" for value in item.get("servers", [])}
+        layout.extend({"type": "server", "id": server["id"]} for server in self._servers if server["id"] not in placed)
+        for item in layout:
+            if item.get("type") == "folder": item["servers"] = [value for value in item.get("servers", []) if value != source_id]
+        layout = [item for item in layout if not (item.get("type") == "server" and item.get("id") == source_id)]
+        inserted = False
+        for index, item in enumerate(layout):
+            if item.get("type") == "folder" and target_id in item.get("servers", []):
+                target_index = item["servers"].index(target_id) + (0 if before else 1)
+                item["servers"].insert(target_index, source_id); inserted = True; break
+            if item.get("type") == "server" and item.get("id") == target_id:
+                layout.insert(index + (0 if before else 1), {"type": "server", "id": source_id}); inserted = True; break
+        if not inserted: layout.append({"type": "server", "id": source_id})
+        self._save_preferences(server_layout=[item for item in layout if item.get("type") != "folder" or item.get("servers")])
+
+    @Slot(str)
+    def moveServerOutOfFolder(self, source_id: str):
+        layout = [dict(item) for item in self.preferences.get("server_layout", []) if isinstance(item, dict)]
+        found = False
+        for item in layout:
+            if item.get("type") == "folder" and source_id in item.get("servers", []):
+                item["servers"] = [value for value in item["servers"] if value != source_id]; found = True
+        if found:
+            layout = [item for item in layout if item.get("type") != "folder" or item.get("servers")]
+            layout.append({"type": "server", "id": source_id})
+            self._save_preferences(server_layout=layout)
+
+    @Slot(str, str, str)
+    def customizeServerFolder(self, folder_id: str, name: str, color: str):
+        layout = self.preferences.get("server_layout", [])
+        for item in layout:
+            if isinstance(item, dict) and item.get("type") == "folder" and item.get("id") == folder_id:
+                item["name"], item["color"] = name.strip()[:32] or "Server folder", color[:16]
+        self._save_preferences(server_layout=layout)
+
+    @Slot(str)
+    def toggleServerFolder(self, folder_id: str):
+        expanded = list(self.preferences.get("expanded_server_folders", []))
+        if folder_id in expanded: expanded.remove(folder_id)
+        else: expanded.append(folder_id)
+        self._save_preferences(expanded_server_folders=expanded)
+
 
     @Slot(str)
     def openSettingsTab(self, tab: str): self._settings_tab = tab; self._page = "settings"; self._notify()
@@ -691,6 +1058,23 @@ class Controller(QObject):
             self._save_preferences(sidebar_expanded=self._sidebar_expanded)
         else:
             self._notify()
+
+    @Slot(int)
+    def setSidebarWidth(self, value: int):
+        width = max(230, min(420, int(value)))
+        if width == self._sidebar_width: return
+        self._sidebar_width = width
+        self._save_preferences(sidebar_width=width)
+
+    @Slot(int)
+    def setServerChannelWidth(self, value: int):
+        width = max(180, min(360, int(value)))
+        if width != self._server_channel_width: self._server_channel_width = width; self._save_preferences(server_channel_width=width)
+
+    @Slot(int)
+    def setServerMemberWidth(self, value: int):
+        width = max(190, min(360, int(value)))
+        if width != self._server_member_width: self._server_member_width = width; self._save_preferences(server_member_width=width)
 
     @Slot(str)
     def selectContact(self, signing_key: str):
@@ -1067,7 +1451,8 @@ class Controller(QObject):
     def _publish_presence(self):
         if not self.identity or self._closing: return
         status = "Offline" if self.presence == "Invisible" else self.presence
-        contacts = [card for card in self.store.contacts() if card["signing_key"] != DEMO_CARD["signing_key"]]
+        cards = self.store.contacts() + [member.get("card", {}) for server in self._servers for member in server.get("members", [])]
+        contacts = list({card["signing_key"]: card for card in cards if card.get("signing_key") not in {DEMO_CARD["signing_key"], self.identity.signing_public}}.values())
         if not contacts: return
         identity = self.identity
         def work():
@@ -1091,6 +1476,8 @@ class Controller(QObject):
                 self._relay_status = "Relay connected"
                 for envelope in state.get("messages", []):
                     sender = self.store.contact_by_encryption_key(str(envelope.get("from", "")))
+                    if not sender:
+                        sender = next((member.get("card") for server in self._servers for member in server.get("members", []) if member.get("card", {}).get("encryption_key") == str(envelope.get("from", ""))), None)
                     if not sender: continue
                     try:
                         message = decrypt_message(identity, envelope, sender)
@@ -1108,6 +1495,8 @@ class Controller(QObject):
                 presence_contacts: dict[str, str] = {}
                 for envelope in state.get("presence", []):
                     sender = self.store.contact_by_encryption_key(str(envelope.get("from", "")))
+                    if not sender:
+                        sender = next((member.get("card") for server in self._servers for member in server.get("members", []) if member.get("card", {}).get("encryption_key") == str(envelope.get("from", ""))), None)
                     if not sender: continue
                     try:
                         signal = str(decrypt_message(identity, envelope, sender).get("text", ""))

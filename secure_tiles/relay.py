@@ -54,6 +54,19 @@ class RelayClient:
     def send_presence(self, envelope: dict[str, Any]) -> None:
         self._request("POST", "/v1/presence", envelope)
 
+    def server_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/v1/servers/action", action)
+
+    def send_server_message(self, action: dict[str, Any]) -> None:
+        self._request("POST", "/v1/servers/messages", action)
+
+    def servers(self, signing_key: str) -> list[dict[str, Any]]:
+        key = urllib.parse.quote(signing_key, safe="")
+        return self._request("GET", f"/v1/servers/member%2F{key}").get("servers", [])
+
+    def server(self, server_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/servers/{urllib.parse.quote(server_id, safe='')}")
+
     def begin_attachment(self, attachment_id: str, token: str, recipient: str, total_size: int, chunks: int) -> None:
         self._request("POST", f"/v1/attachments/{attachment_id}/begin",
                       {"token": token, "recipient": recipient, "total_size": total_size, "chunks": chunks})

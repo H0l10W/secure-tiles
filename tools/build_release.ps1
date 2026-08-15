@@ -17,11 +17,25 @@ if (-not $Version) {
 $portableName = "Secure-Tiles-Portable-v$Version"
 $portablePath = Join-Path $projectRoot "dist\$portableName.exe"
 $installerPath = Join-Path $projectRoot "dist\Secure-Tiles-Setup-v$Version.exe"
+$versionParts = $Version.Split('.')
+if ($versionParts.Count -ne 3 -or @($versionParts | Where-Object { $_ -notmatch '^\d+$' }).Count -gt 0) {
+    throw "Version must contain three numeric parts."
+}
+$versionTuple = "($($versionParts[0]), $($versionParts[1]), $($versionParts[2]), 0)"
+$generatedVersionFile = Join-Path $projectRoot "build\version_info-$Version.txt"
+New-Item -ItemType Directory -Force (Split-Path -Parent $generatedVersionFile) | Out-Null
+$versionInfo = Get-Content "packaging\version_info.txt" -Raw
+$versionInfo = $versionInfo -replace 'filevers=\([^)]*\)', "filevers=$versionTuple"
+$versionInfo = $versionInfo -replace 'prodvers=\([^)]*\)', "prodvers=$versionTuple"
+$versionInfo = $versionInfo -replace "StringStruct\(u'FileVersion', u'[^']*'\)", "StringStruct(u'FileVersion', u'$Version')"
+$versionInfo = $versionInfo -replace "StringStruct\(u'OriginalFilename', u'[^']*'\)", "StringStruct(u'OriginalFilename', u'$portableName.exe')"
+$versionInfo = $versionInfo -replace "StringStruct\(u'ProductVersion', u'[^']*'\)", "StringStruct(u'ProductVersion', u'$Version')"
+Set-Content -LiteralPath $generatedVersionFile -Value $versionInfo -Encoding UTF8
 
 python -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name $portableName `
     --icon "assets\secure_tiles.ico" `
-    --version-file "packaging\version_info.txt" `
+    --version-file $generatedVersionFile `
     --add-data "secure_tiles\qml;secure_tiles\qml" `
     --add-data "assets;assets" `
     --hidden-import relay_server `

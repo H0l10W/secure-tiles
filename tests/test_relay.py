@@ -9,6 +9,7 @@ from pathlib import Path
 from relay_server import Database, Handler
 from secure_tiles.crypto import Identity, encrypt_message, public_card, validate_card
 from secure_tiles.relay import RelayClient, RelayError
+from secure_tiles.servers import new_server_id, sign_server_action
 
 
 class RelayTests(unittest.TestCase):
@@ -66,6 +67,74 @@ class RelayTests(unittest.TestCase):
         state = self.client.inbox_state(recipient.encryption_public)
         self.assertEqual(state["presence"][0]["id"], packet["id"])
         self.assertEqual(state["messages"], [])
+
+    def test_signed_server_creation_invite_and_membership(self):
+        owner, member = Identity.generate(), Identity.generate()
+        owner_card, member_card = public_card(owner, "server_owner"), public_card(member, "server_member")
+        self.client.register(owner_card); self.client.register(member_card)
+        server_id = new_server_id()
+        created = self.client.server_action(sign_server_action(owner, "server.create", server_id,
+                                                               {"name": "Test Server", "owner_card": owner_card, "accent": "#5865f2"}))
+        self.assertEqual(created["name"], "Test Server"); self.assertEqual(created["channels"][0]["type"], "text")
+        code = uuid.uuid4().hex[:12]
+        self.client.server_action(sign_server_action(owner, "invite.create", server_id,
+                                                     {"code": code, "role_id": "member", "uses": 1}))
+        joined = self.client.server_action(sign_server_action(member, "invite.redeem", server_id,
+                                                              {"code": code, "member_card": member_card}))
+        self.assertEqual(len(joined["members"]), 2)
+        self.assertEqual(self.client.servers(member.signing_public)[0]["id"], server_id)
+
+    def test_regular_server_member_cannot_manage_channels(self):
+        owner, member = Identity.generate(), Identity.generate()
+        owner_card, member_card = public_card(owner, "permission_owner"), public_card(member, "permission_member")
+        self.client.register(owner_card); self.client.register(member_card); server_id = new_server_id(); code = uuid.uuid4().hex[:12]
+        self.client.server_action(sign_server_action(owner, "server.create", server_id, {"name": "Permissions", "owner_card": owner_card}))
+        self.client.server_action(sign_server_action(owner, "invite.create", server_id, {"code": code, "role_id": "member"}))
+        self.client.server_action(sign_server_action(member, "invite.redeem", server_id, {"code": code, "member_card": member_card}))
+        with self.assertRaises(RelayError):
+            self.client.server_action(sign_server_action(member, "channel.create", server_id, {"name": "staff", "type": "text"}))
+
+    def test_server_owner_can_rename_built_in_roles(self):
+        owner = Identity.generate(); card = public_card(owner, "role_rename_owner"); self.client.register(card); server_id = new_server_id()
+        server = self.client.server_action(sign_server_action(owner, "server.create", server_id, {"name": "Roles", "owner_card": card}))
+        admin = next(role for role in server["roles"] if role["id"] == "admin")
+        updated = self.client.server_action(sign_server_action(owner, "role.update", server_id, {"role_id": "admin", "name": "Moderators", "color": admin["color"], "permissions": admin["permissions"]}))
+        self.assertEqual(next(role for role in updated["roles"] if role["id"] == "admin")["name"], "Moderators")
+
+    def test_server_message_fanout_is_permission_checked(self):
+        owner, member = Identity.generate(), Identity.generate()
+        owner_card, member_card = public_card(owner, "fanout_owner"), public_card(member, "fanout_member")
+        self.client.register(owner_card); self.client.register(member_card); server_id = new_server_id(); code = uuid.uuid4().hex[:12]
+        server = self.client.server_action(sign_server_action(owner, "server.create", server_id, {"name": "Fanout", "owner_card": owner_card}))
+        self.client.server_action(sign_server_action(owner, "invite.create", server_id, {"code": code, "role_id": "member"}))
+        self.client.server_action(sign_server_action(member, "invite.redeem", server_id, {"code": code, "member_card": member_card}))
+        packet = encrypt_message(owner, validate_card(member_card), "encrypted channel payload")
+        action = sign_server_action(owner, "message.send", server_id, {"channel_id": server["channels"][0]["id"], "packets": [packet]})
+        self.client.send_server_message(action)
+        self.assertEqual(self.client.inbox(member.encryption_public)[0]["id"], packet["id"])
+        outsider = Identity.generate(); outsider_card = public_card(outsider, "fanout_outsider"); self.client.register(outsider_card)
+        bad_packet = encrypt_message(owner, validate_card(outsider_card), "leak")
+        with self.assertRaises(RelayError):
+            self.client.send_server_message(sign_server_action(owner, "message.send", server_id, {"channel_id": server["channels"][0]["id"], "packets": [bad_packet]}))
+
+    def test_server_owner_can_permanently_delete_server(self):
+        owner = Identity.generate(); owner_card = public_card(owner, "delete_owner")
+        self.client.register(owner_card); server_id = new_server_id()
+        self.client.server_action(sign_server_action(owner, "server.create", server_id, {"name": "Disposable", "owner_card": owner_card}))
+        result = self.client.server_action(sign_server_action(owner, "server.delete", server_id, {}))
+        self.assertEqual(result, {"deleted": True, "id": server_id})
+        with self.assertRaises(RelayError): self.client.server(server_id)
+
+    def test_invite_codes_are_globally_unique_and_can_be_non_expiring(self):
+        first, second = Identity.generate(), Identity.generate()
+        first_card, second_card = public_card(first, "invite_unique_one"), public_card(second, "invite_unique_two")
+        self.client.register(first_card); self.client.register(second_card)
+        first_id, second_id, code = new_server_id(), new_server_id(), "NeverDuplicateMe"
+        self.client.server_action(sign_server_action(first, "server.create", first_id, {"name": "One", "owner_card": first_card}))
+        self.client.server_action(sign_server_action(second, "server.create", second_id, {"name": "Two", "owner_card": second_card}))
+        self.client.server_action(sign_server_action(first, "invite.create", first_id, {"code": code, "role_id": "member", "expires": 0}))
+        with self.assertRaises(RelayError):
+            self.client.server_action(sign_server_action(second, "invite.create", second_id, {"code": code, "role_id": "member", "expires": 0}))
 
     def test_chunked_attachment_upload_can_resume_and_download(self):
         transfer_id, token = uuid.uuid4().hex, base64.urlsafe_b64encode(b"token" * 8).decode("ascii")

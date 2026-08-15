@@ -9,6 +9,18 @@ from secure_tiles.store import Store
 
 
 class StoreTests(unittest.TestCase):
+    def test_server_messages_are_partitioned_by_channel(self):
+        directory = Path.cwd() / "tests" / f"store-test-{uuid.uuid4().hex}"
+        directory.mkdir()
+        try:
+            store = Store(directory)
+            store.add_server_message("one", "server", "general", "alice", "in", 1, "hello")
+            store.add_server_message("two", "server", "staff", "bob", "out", 2, "secret")
+            self.assertEqual([row["plaintext"] for row in store.server_messages("server", "general")], ["hello"])
+            store.db.close()
+        finally:
+            shutil.rmtree(directory)
+
     def test_attachment_is_written_to_local_history(self):
         directory = Path.cwd() / "tests" / f"store-test-{uuid.uuid4().hex}"
         directory.mkdir()

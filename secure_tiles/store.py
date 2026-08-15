@@ -28,6 +28,13 @@ class Store:
                 id TEXT PRIMARY KEY, contact_key TEXT NOT NULL, direction TEXT NOT NULL,
                 sent_at INTEGER NOT NULL, plaintext TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS server_messages (
+                id TEXT PRIMARY KEY, server_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+                sender_key TEXT NOT NULL, direction TEXT NOT NULL,
+                sent_at INTEGER NOT NULL, plaintext TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS server_messages_channel
+                ON server_messages(server_id, channel_id, sent_at);
         """)
         columns = {row["name"] for row in self.db.execute("PRAGMA table_info(messages)")}
         if "attachments" not in columns:
@@ -147,4 +154,18 @@ class Store:
     def messages(self, contact_key: str) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT * FROM messages WHERE contact_key = ? ORDER BY sent_at, rowid", (contact_key,)
+        ).fetchall()
+
+    def add_server_message(self, message_id: str, server_id: str, channel_id: str,
+                           sender_key: str, direction: str, sent_at: int, plaintext: str) -> None:
+        self.db.execute(
+            "INSERT OR IGNORE INTO server_messages VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (message_id, server_id, channel_id, sender_key, direction, sent_at, plaintext),
+        )
+        self.db.commit()
+
+    def server_messages(self, server_id: str, channel_id: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM server_messages WHERE server_id = ? AND channel_id = ? ORDER BY sent_at, rowid",
+            (server_id, channel_id),
         ).fetchall()
