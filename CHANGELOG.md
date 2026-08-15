@@ -2,6 +2,20 @@
 
 All notable changes to Secure Tiles are recorded in this file.
 
+## 0.3.7 - 2026-08-15
+
+- Added dedicated People and Favorites sidebar tabs with a finished empty-favorites state.
+- Kept normal contact avatars visible when favorited instead of replacing them with a star.
+- Added encrypted sharing and rendering of profile bios, pronouns, custom statuses, status emoji, banner colors, avatars, banners, and profile backgrounds.
+- Added a customized Cipher Bot profile for testing shared profile presentation.
+- Redesigned the application header, sidebar, account bar, settings navigation, contact profiles, chat surfaces, and interaction states for a cohesive professional interface.
+- Rebalanced custom colors into readable tinted controls with visible borders and restrained selected states.
+- Fixed theme colors becoming transparent because QML received string values instead of color objects.
+- Added persistent readable settings cards and stronger content surfaces over detailed wallpapers.
+- Increased body, control, sidebar, message, label, and settings text sizes for improved clarity.
+- Added full font hinting, a consistent Segoe UI fallback, and pass-through high-DPI scaling for crisp Windows rendering.
+- Fixed a stale message-composer focus binding that produced runtime warnings.
+
 ## 0.3.6 - 2026-08-14
 
 - Fixed Restart to update closing both installed and portable builds without completing the update or relaunching the application.

@@ -10,16 +10,32 @@ ApplicationWindow {
     minimumWidth: 880
     minimumHeight: 580
     title: "Secure Tiles"
-    color: backend.colors.bg
+    color: backend.qmlColors.bg
 
-    property var c: backend.colors
+    property var c: backend.qmlColors
     property int motion: backend.animationsEnabled ? 115 : 0
     property real uiScale: backend.fontScale
     property bool compactMessages: backend.messageDensity === "Compact"
     property int corner: backend.cornerRadius
     property color buttonSurface: backend.buttonColor
     property color messageSurface: backend.chatBackground
-    function alphaColor(value, amount) { return Qt.rgba(value.r, value.g, value.b, amount) }
+    property bool favoritesOnly: false
+    property color strongSurface: root.alphaColor(root.c.panel, Math.max(.84, backend.panelOpacity))
+    property color softSurface: root.alphaColor(root.c.panel, Math.max(.68, backend.panelOpacity))
+    function validColor(value) {
+        return value !== undefined && value !== null && value.r !== undefined
+               && value.g !== undefined && value.b !== undefined
+    }
+    function alphaColor(value, amount) {
+        if (!validColor(value)) return Qt.rgba(0, 0, 0, 0)
+        return Qt.rgba(value.r, value.g, value.b, amount)
+    }
+    function mixColor(a, b, amount) {
+        if (!validColor(a)) a = Qt.rgba(.15, .16, .17, 1)
+        if (!validColor(b)) b = a
+        return Qt.rgba(a.r + (b.r - a.r) * amount, a.g + (b.g - a.g) * amount,
+                       a.b + (b.b - a.b) * amount, a.a + (b.a - a.a) * amount)
+    }
 
     Popup {
         id: imageViewer
@@ -74,13 +90,14 @@ ApplicationWindow {
         color: root.alphaColor(root.c.panel, backend.panelOpacity)
         radius: root.corner
         border.width: color.a > 0 ? 1 : 0
-        border.color: root.alphaColor(Qt.lighter(color, 1.35), 0.16)
+        border.color: root.alphaColor(root.c.text, 0.1)
     }
 
     component AppText: Text {
         color: root.c.text
         font.family: "Segoe UI"
-        font.pixelSize: Math.round(14 * root.uiScale)
+        font.pixelSize: Math.round(15 * root.uiScale)
+        font.hintingPreference: Font.PreferFullHinting
         renderType: Text.NativeRendering
     }
 
@@ -89,10 +106,15 @@ ApplicationWindow {
         property bool accent: false
         property bool quiet: false
         property bool selected: false
-        property color textColor: control.accent ? root.c.bg : root.c.text
+        property color textColor: root.c.text
         implicitHeight: 38
         implicitWidth: Math.max(70, contentItem.implicitWidth + 28)
         hoverEnabled: true
+        font.family: "Segoe UI"
+        font.pixelSize: Math.round(13 * root.uiScale)
+        font.hintingPreference: Font.PreferFullHinting
+        scale: down ? .98 : 1
+        Behavior on scale { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
         contentItem: Text {
             text: control.text
             color: control.textColor
@@ -104,15 +126,17 @@ ApplicationWindow {
         background: Rectangle {
             id: buttonBackground
             readonly property bool quietIdle: control.quiet && !control.hovered && !control.down && !control.selected
-            readonly property real surfaceOpacity: backend.controlOpacity * (control.accent || control.selected ? 1 : control.quiet ? (control.hovered || control.down ? .42 : .18) : control.hovered ? .78 : .62)
-            readonly property color baseColor: control.hovered || control.down ? Qt.lighter(root.buttonSurface, 1.18) : root.buttonSurface
+            readonly property real surfaceOpacity: backend.controlOpacity * (control.accent || control.selected ? .82 : control.quiet ? (control.hovered || control.down ? .5 : .12) : control.hovered ? .92 : .76)
+            readonly property color neutralTint: root.mixColor(root.c.tile, root.buttonSurface, control.hovered || control.down ? .36 : .28)
+            readonly property color stateTint: root.mixColor(root.c.tile, root.c.accent, control.down ? .38 : control.hovered ? .3 : .23)
+            readonly property color baseColor: control.accent || control.selected ? stateTint : control.hovered || control.down ? Qt.lighter(neutralTint, 1.1) : neutralTint
             radius: Math.max(4, root.corner - 2)
             border.width: quietIdle ? 0 : 1
-            border.color: control.selected ? root.c.accent : root.alphaColor(Qt.lighter(baseColor, 1.5), .2)
+            border.color: control.accent || control.selected ? root.alphaColor(root.c.accent, .78) : root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .55), .34)
             color: root.alphaColor(baseColor, surfaceOpacity)
             gradient: Gradient {
-                GradientStop { position: 0; color: root.alphaColor(Qt.lighter(buttonBackground.baseColor, 1.12), buttonBackground.surfaceOpacity) }
-                GradientStop { position: 1; color: root.alphaColor(Qt.darker(buttonBackground.baseColor, 1.08), buttonBackground.surfaceOpacity) }
+                GradientStop { position: 0; color: root.alphaColor(Qt.lighter(buttonBackground.baseColor, 1.04), buttonBackground.surfaceOpacity) }
+                GradientStop { position: 1; color: root.alphaColor(buttonBackground.baseColor, buttonBackground.surfaceOpacity) }
             }
             Behavior on color { ColorAnimation { duration: root.motion } }
         }
@@ -126,15 +150,12 @@ ApplicationWindow {
         selectionColor: root.c.accent
         selectedTextColor: root.c.bg
         font.family: "Segoe UI"
-        font.pixelSize: Math.round(14 * root.uiScale)
+        font.pixelSize: Math.round(15 * root.uiScale)
+        font.hintingPreference: Font.PreferFullHinting
         leftPadding: 13; rightPadding: 13
         background: Rectangle {
-            color: root.alphaColor(root.buttonSurface, backend.controlOpacity); radius: Math.max(4, root.corner - 2); border.width: 1
-            border.color: field.activeFocus ? root.c.accent : root.alphaColor(Qt.lighter(root.buttonSurface, 1.5), .18)
-            gradient: Gradient {
-                GradientStop { position: 0; color: root.alphaColor(Qt.lighter(root.buttonSurface, 1.08), backend.controlOpacity) }
-                GradientStop { position: 1; color: root.alphaColor(Qt.darker(root.buttonSurface, 1.06), backend.controlOpacity) }
-            }
+            color: root.alphaColor(root.mixColor(root.c.bg, root.buttonSurface, .18), Math.max(.9, backend.controlOpacity)); radius: Math.max(4, root.corner - 2); border.width: field.activeFocus ? 2 : 1
+            border.color: field.activeFocus ? root.c.accent : root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .62), .55)
         }
     }
 
@@ -286,27 +307,33 @@ ApplicationWindow {
             Rectangle { anchors.fill: parent; color: root.c.bg }
             AnimatedImage { anchors.fill: parent; source: backend.wallpaperUrl; fillMode: Image.PreserveAspectCrop; opacity: backend.wallpaperOpacity; visible: source !== "" }
             ColumnLayout {
-                anchors.fill: parent; anchors.margins: 12; spacing: 10
-                RowLayout {
-                    Layout.fillWidth: true; Layout.preferredHeight: 42
-                    AppText { text: "SECURE TILES"; font.pixelSize: 21; font.bold: true }
-                    AppText { text: backend.displayName.toUpperCase(); color: root.c.accent; font.family: backend.displayFont; font.pixelSize: 10; font.bold: true }
-                    Item { Layout.fillWidth: true }
-                    Rectangle { width: 7; height: 7; radius: 4; color: backend.relayStatus === "Relay connected" ? root.c.accent : root.c.danger }
-                    AppText { text: backend.relayStatus; color: backend.relayStatus === "Relay connected" ? root.c.accent : root.c.muted; font.pixelSize: 11; font.bold: true }
+                anchors.fill: parent; anchors.margins: 14; spacing: 10
+                Panel {
+                    Layout.fillWidth: true; Layout.preferredHeight: 48; color: root.strongSurface
+                    RowLayout { anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 14; spacing: 9
+                        Rectangle { width: 9; height: 9; radius: 3; rotation: 45; color: root.c.accent }
+                        AppText { text: "SECURE TILES"; font.pixelSize: 16; font.bold: true; font.letterSpacing: .4 }
+                        Rectangle { width: 1; height: 18; color: root.alphaColor(root.c.text, .16) }
+                        AppText { text: backend.displayName; color: root.c.muted; font.family: backend.displayFont; font.pixelSize: 12; font.bold: true }
+                        Item { Layout.fillWidth: true }
+                        Rectangle { width: 8; height: 8; radius: 4; color: backend.relayStatus === "Relay connected" ? "#22c55e" : root.c.danger }
+                        AppText { text: backend.relayStatus; color: root.c.muted; font.pixelSize: 12; font.bold: true }
+                    }
                 }
                 RowLayout {
                     Layout.fillWidth: true; Layout.fillHeight: true; spacing: 10
                     Panel {
                         id: sidebar
                         Layout.fillHeight: true
-                        Layout.preferredWidth: backend.sidebarExpanded ? 286 : 72
+                        Layout.preferredWidth: backend.sidebarExpanded ? 276 : 64
+                        color: root.strongSurface
                         Behavior on Layout.preferredWidth { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 9; spacing: 8
                             RowLayout {
                                 Layout.fillWidth: true
-                                AppButton { visible: backend.sidebarExpanded; text: "People"; quiet: true; Layout.preferredWidth: 76; onClicked: backend.openPage("friends") }
+                                AppButton { visible: backend.sidebarExpanded; text: "People"; quiet: true; selected: !root.favoritesOnly; Layout.preferredWidth: 76; onClicked: root.favoritesOnly = false }
+                                AppButton { visible: backend.sidebarExpanded; text: "Favorites"; quiet: true; selected: root.favoritesOnly; Layout.preferredWidth: 88; onClicked: root.favoritesOnly = true }
                                 Item { Layout.fillWidth: true }
                                 AppButton { Layout.preferredWidth: 42; text: backend.sidebarExpanded ? "‹" : "›"; font.pixelSize: 20; ToolTip.visible: hovered; ToolTip.text: backend.sidebarExpanded ? "Collapse people" : "Expand people"; onClicked: backend.toggleSidebar() }
                             }
@@ -316,8 +343,10 @@ ApplicationWindow {
                                 AppButton { text: "+"; accent: true; Layout.preferredWidth: 42; ToolTip.visible: hovered; ToolTip.text: "Add by username"; onClicked: backend.addContact(contactSearch.text) }
                             }
                             ListView {
+                                id: contactList
                                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 5; clip: true
-                                model: backend.contacts
+                                model: root.favoritesOnly ? backend.favoriteContacts : backend.contacts
+                                AppText { anchors.centerIn: parent; visible: contactList.count === 0; width: Math.max(0, parent.width - 20); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; text: root.favoritesOnly ? "No favorites yet\nStar someone from their profile." : "No contacts yet"; color: root.c.muted; font.pixelSize: 11 }
                                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AlwaysOff }
                                 delegate: AppButton {
                                     id: contactButton
@@ -332,7 +361,7 @@ ApplicationWindow {
                                             color: contactButton.accent ? root.c.bg : root.c.hover
                                             AppText {
                                                 anchors.centerIn: parent
-                                                text: modelData.favorite ? "★" : modelData.initials
+                                                text: modelData.initials
                                                 color: contactButton.accent ? root.c.accent : root.c.text
                                                 font.pixelSize: 10; font.bold: true
                                             }
@@ -343,7 +372,7 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                             text: modelData.displayName
                                             font.family: modelData.displayFont
-                                            color: contactButton.textColor; font.pixelSize: 12; font.bold: true
+                                            color: contactButton.textColor; font.pixelSize: 13; font.bold: true
                                             elide: Text.ElideRight
                                         }
                                         Rectangle {
@@ -361,15 +390,17 @@ ApplicationWindow {
                     }
                     Panel {
                         Layout.fillWidth: true; Layout.fillHeight: true
-                        Loader { anchors.fill: parent; anchors.margins: 14; sourceComponent: backend.page === "settings" ? settingsView : backend.page === "contact" ? contactView : backend.page === "friends" ? friendsView : chatView }
+                        color: root.softSurface
+                        Loader { anchors.fill: parent; anchors.margins: 18; sourceComponent: backend.page === "settings" ? settingsView : backend.page === "contact" ? contactView : backend.page === "friends" ? friendsView : chatView }
                     }
                 }
             }
 
             Panel {
                 id: identityBar
-                x: 20; y: parent.height - height - 20; width: backend.sidebarExpanded ? 270 : 270; height: 54
-                color: root.c.tile; z: 10
+                x: 23; y: parent.height - height - 23; width: backend.sidebarExpanded ? 258 : 46; height: 50
+                color: root.alphaColor(root.c.tile, .96); z: 10; clip: true
+                Behavior on width { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
                 RowLayout {
                     anchors.fill: parent; anchors.margins: 5; spacing: 7
                     Rectangle {
@@ -377,14 +408,14 @@ ApplicationWindow {
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 5; spacing: 8
                             Avatar { size: 36 }
-                            ColumnLayout { spacing: 0; Layout.fillWidth: true
+                            ColumnLayout { visible: backend.sidebarExpanded; spacing: 0; Layout.fillWidth: true
                                 AppText { text: backend.displayName; font.family: backend.displayFont; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                                 RowLayout { spacing: 5; Rectangle { width: 7; height: 7; radius: 4; color: backend.presenceColor } AppText { text: backend.presence; font.pixelSize: 10 } }
                             }
                         }
                         MouseArea { id: identityArea; anchors.fill: parent; hoverEnabled: true; onClicked: profilePopup.open() }
                     }
-                    AppButton { Layout.preferredWidth: 42; text: "⚙"; font.pixelSize: 17; ToolTip.visible: hovered; ToolTip.text: "User Settings"; onClicked: backend.openSettingsTab("My Profile") }
+                    AppButton { visible: backend.sidebarExpanded; Layout.preferredWidth: 40; text: "⚙"; font.pixelSize: 17; ToolTip.visible: hovered; ToolTip.text: "User Settings"; onClicked: backend.openSettingsTab("My Profile") }
                 }
             }
 
@@ -452,7 +483,7 @@ ApplicationWindow {
                 ColumnLayout { spacing: 2
                     AppText { text: backend.selectedName ? backend.selectedDisplayName : "Choose someone to start"; font.family: backend.selectedDisplayFont; font.pixelSize: 21; font.bold: true }
                     AppText { visible: backend.selectedName !== "" && backend.selectedDisplayName !== backend.selectedName; text: "@" + backend.selectedName; color: root.c.muted; font.pixelSize: 10 }
-                    AppText { text: backend.selectedName ? "End-to-end encrypted. Open Profile to verify identity." : "Messages are encrypted before leaving this device."; color: root.c.muted; font.pixelSize: 12 }
+                    AppText { text: backend.selectedName ? "End-to-end encrypted. Open Profile to verify identity." : "Messages are encrypted before leaving this device."; color: root.c.muted; font.pixelSize: 13 }
                 }
                 Item { Layout.fillWidth: true }
                 RowLayout {
@@ -481,8 +512,9 @@ ApplicationWindow {
                     property bool matchesSearch: chatRoot.searchQuery === "" || modelData.searchText.indexOf(chatRoot.searchQuery) >= 0
                     visible: matchesSearch
                     height: visible ? messageLayout.implicitHeight + (root.compactMessages ? 8 : 16) + (modelData.showDate ? 30 : 0) : 0
-                    color: "transparent"
+                    color: messageHover.hovered ? root.alphaColor(root.c.tile, .48) : "transparent"
                     radius: 7
+                    Behavior on color { ColorAnimation { duration: root.motion } }
                     RowLayout {
                         visible: messageRow.modelData.showDate
                         anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 26; spacing: 10
@@ -511,14 +543,14 @@ ApplicationWindow {
                             RowLayout {
                                 Layout.fillWidth: true; spacing: 7
                                 AppText {
-                                    text: messageRow.modelData.sender; color: senderProfileArea.containsMouse ? root.c.text : root.c.accent; font.family: messageRow.modelData.senderFont; font.pixelSize: Math.round(11 * root.uiScale); font.bold: true; font.underline: senderProfileArea.containsMouse
+                                    text: messageRow.modelData.sender; color: senderProfileArea.containsMouse ? root.c.text : root.c.accent; font.family: messageRow.modelData.senderFont; font.pixelSize: Math.round(12 * root.uiScale); font.bold: true; font.underline: senderProfileArea.containsMouse
                                     Behavior on color { ColorAnimation { duration: root.motion } }
                                     MouseArea { id: senderProfileArea; anchors.fill: parent; enabled: !messageRow.modelData.outgoing; hoverEnabled: true; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: backend.openPage("contact") }
                                 }
-                                AppText { text: messageRow.modelData.timestamp; color: root.c.muted; font.pixelSize: Math.round(10 * root.uiScale); ToolTip.visible: timestampHover.containsMouse; ToolTip.text: messageRow.modelData.fullTimestamp; MouseArea { id: timestampHover; anchors.fill: parent; hoverEnabled: true } }
+                                AppText { text: messageRow.modelData.timestamp; color: root.c.muted; font.pixelSize: Math.round(11 * root.uiScale); ToolTip.visible: timestampHover.containsMouse; ToolTip.text: messageRow.modelData.fullTimestamp; MouseArea { id: timestampHover; anchors.fill: parent; hoverEnabled: true } }
                                 Item { Layout.fillWidth: true }
                             }
-                            Text { Layout.fillWidth: true; text: messageRow.modelData.body; textFormat: Text.RichText; color: root.c.text; font.family: "Segoe UI"; font.pixelSize: Math.round(14 * root.uiScale); wrapMode: Text.Wrap; renderType: Text.NativeRendering }
+                            Text { Layout.fillWidth: true; text: messageRow.modelData.body; textFormat: Text.RichText; color: root.c.text; font.family: "Segoe UI"; font.pixelSize: Math.round(15 * root.uiScale); font.hintingPreference: Font.PreferFullHinting; wrapMode: Text.Wrap; renderType: Text.NativeRendering }
                             Repeater {
                                 model: messageRow.modelData.attachments
                                 ColumnLayout {
@@ -567,8 +599,8 @@ ApplicationWindow {
             }
             Panel {
                 id: composerPanel
-                Layout.fillWidth: true; Layout.preferredHeight: backend.pendingAttachments.length > 0 ? 154 : 116; color: root.alphaColor(root.buttonSurface, backend.controlOpacity); radius: 10
-                border.width: 1; border.color: root.alphaColor(Qt.lighter(root.buttonSurface, 1.5), .18)
+                Layout.fillWidth: true; Layout.preferredHeight: backend.pendingAttachments.length > 0 ? 146 : 108; color: root.alphaColor(root.mixColor(root.c.tile, root.buttonSurface, .18), Math.max(.9, backend.controlOpacity)); radius: 10
+                border.width: 1; border.color: root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .5), .28)
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 7; spacing: 4
                     RowLayout {
@@ -604,13 +636,13 @@ ApplicationWindow {
                         TextArea {
                             id: composer; Layout.fillWidth: true; Layout.fillHeight: true
                             color: root.c.text; placeholderText: backend.selectedName ? "Message " + backend.selectedDisplayName : "Choose a contact first"; placeholderTextColor: root.c.muted
-                            font.family: "Segoe UI"; font.pixelSize: 14; wrapMode: TextEdit.Wrap; padding: 10
+                            font.family: "Segoe UI"; font.pixelSize: Math.round(15 * root.uiScale); font.hintingPreference: Font.PreferFullHinting; wrapMode: TextEdit.Wrap; padding: 10
                             onTextChanged: {
                                 if (length > 4000) remove(4000, length)
                                 backend.setTyping(length > 0 && activeFocus)
                             }
                             onActiveFocusChanged: backend.setTyping(length > 0 && activeFocus)
-                            background: Rectangle { color: "transparent"; radius: 8; border.width: editor.activeFocus ? 1 : 0; border.color: root.c.accent }
+                            background: Rectangle { color: "transparent"; radius: 8; border.width: composer.activeFocus ? 1 : 0; border.color: root.c.accent }
                             Keys.onReturnPressed: function(event) {
                                 var shouldSend = backend.enterToSend ? !(event.modifiers & Qt.ShiftModifier) : (event.modifiers & Qt.ControlModifier)
                                 if (shouldSend) { backend.sendMessage(text); text = ""; event.accepted = true }
@@ -648,7 +680,7 @@ ApplicationWindow {
             GridView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true
                 cellWidth: Math.max(220, width / Math.max(1, Math.floor(width / 260))); cellHeight: 92
-                model: backend.contacts
+                model: backend.favoriteContacts
                 delegate: Item {
                     required property var modelData; width: GridView.view.cellWidth; height: 88
                     Rectangle { anchors.fill: parent; anchors.margins: 4; radius: root.corner; color: friendArea.containsMouse ? root.c.hover : root.alphaColor(root.c.tile, backend.controlOpacity)
@@ -676,12 +708,18 @@ ApplicationWindow {
             spacing: 14
             RowLayout { Layout.fillWidth: true; AppText { text: "Contact profile"; font.pixelSize: 22; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: "Back to chat"; onClicked: backend.openPage("chat") } }
             Panel {
-                Layout.fillWidth: true; Layout.preferredHeight: 390; color: root.c.bg
-                ColumnLayout { anchors.fill: parent; anchors.margins: 26; spacing: 8
-                    Rectangle { width: 82; height: 82; radius: 41; color: root.c.tile; AppText { anchors.centerIn: parent; text: backend.selectedIsDemo ? "BOT" : backend.selectedName.slice(0,2).toUpperCase(); font.pixelSize: 23; font.bold: true } StatusBadge { status: backend.selectedPresence; size: 22; anchors.right: parent.right; anchors.bottom: parent.bottom } }
-                    AppText { text: backend.selectedDisplayName; font.family: backend.selectedDisplayFont; font.pixelSize: 21; font.bold: true }
+                Layout.fillWidth: true; Layout.preferredHeight: 440; color: root.c.bg; clip: true
+                Rectangle { anchors.fill: parent; color: backend.selectedBannerColor; opacity: .14 }
+                AnimatedImage { anchors.fill: parent; source: backend.selectedProfileBackgroundUrl; fillMode: Image.PreserveAspectCrop; visible: source !== ""; opacity: .3 }
+                Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 112; color: backend.selectedBannerColor }
+                AnimatedImage { anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 112; source: backend.selectedProfileBannerUrl; fillMode: Image.PreserveAspectCrop; visible: source !== "" }
+                ColumnLayout { anchors.fill: parent; anchors.margins: 26; anchors.topMargin: 66; spacing: 8
+                    Avatar { size: 82; initials: backend.selectedIsDemo ? "BOT" : backend.selectedName.slice(0,2).toUpperCase(); status: backend.selectedPresence; source: backend.selectedAvatarUrl }
+                    RowLayout { AppText { text: backend.selectedDisplayName; font.family: backend.selectedDisplayFont; font.pixelSize: 21; font.bold: true } AppText { visible: backend.selectedPronouns !== ""; text: backend.selectedPronouns; color: root.c.muted; font.pixelSize: 11 } }
                     AppText { text: "@" + backend.selectedName; color: root.c.muted }
-                    AppText { text: backend.selectedIsDemo ? "Demo encrypted echo account" : "Secure Tiles contact"; color: root.c.muted }
+                    AppText { visible: backend.selectedCustomStatus !== ""; text: (backend.selectedStatusEmoji ? backend.selectedStatusEmoji + "  " : "") + backend.selectedCustomStatus; font.family: backend.selectedDisplayFont; color: root.c.text }
+                    AppText { visible: backend.selectedBio !== ""; text: backend.selectedBio; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                    AppText { visible: backend.selectedBio === "" && backend.selectedCustomStatus === ""; text: backend.selectedIsDemo ? "Demo encrypted echo account" : "Secure Tiles contact"; color: root.c.muted }
                     RowLayout { Layout.topMargin: 8
                         AppButton { text: backend.selectedFavorite ? "★ Favorited" : "☆ Add favorite"; selected: backend.selectedFavorite; onClicked: backend.toggleFavoriteContact() }
                         AppField { id: contactNickname; Layout.preferredWidth: 220; placeholderText: "Local nickname"; text: backend.selectedNickname; maximumLength: 32 }
@@ -699,28 +737,27 @@ ApplicationWindow {
     Component {
         id: settingsView
         ColumnLayout {
-            spacing: 12
-            RowLayout { Layout.fillWidth: true; AppText { text: "Settings"; font.pixelSize: 23; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: "Back to messages"; onClicked: backend.openPage("chat") } }
+            spacing: 14
+            RowLayout { Layout.fillWidth: true; AppText { text: "Settings"; font.pixelSize: 22; font.bold: true } AppText { text: "Personalize your Secure Tiles experience"; color: root.c.muted; font.pixelSize: 11 } Item { Layout.fillWidth: true } AppButton { text: "Back to messages"; onClicked: backend.openPage("chat") } }
             RowLayout {
-                Layout.fillWidth: true; Layout.fillHeight: true; spacing: 16
+                Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
                 Panel {
-                    Layout.preferredWidth: 170; Layout.fillHeight: true; color: "transparent"; radius: 0
-                    ColumnLayout { anchors.fill: parent; anchors.margins: 9; spacing: 4
+                    Layout.preferredWidth: 184; Layout.fillHeight: true; color: root.strongSurface
+                    ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 5
+                        SectionLabel { text: "SETTINGS"; Layout.leftMargin: 9; Layout.topMargin: 5; Layout.bottomMargin: 3 }
                         Repeater { model: ["My Profile", "General", "Appearance", "Privacy", "Notifications", "About"]
                             Item {
                                 required property string modelData
-                                Layout.fillWidth: true; Layout.preferredHeight: 38
-                                Rectangle { visible: backend.settingsTab === parent.modelData; anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; width: 3; height: 22; radius: 2; color: root.c.accent }
-                                AppButton { anchors.fill: parent; anchors.leftMargin: 7; text: parent.modelData; quiet: true; textColor: backend.settingsTab === parent.modelData ? root.c.accent : root.c.text; onClicked: backend.openSettingsTab(parent.modelData) }
+                                Layout.fillWidth: true; Layout.preferredHeight: 40
+                                AppButton { anchors.fill: parent; text: parent.modelData; quiet: true; selected: backend.settingsTab === parent.modelData; leftPadding: 13; rightPadding: 10; contentItem: AppText { text: parent.text; color: parent.selected ? root.c.text : root.alphaColor(root.c.text, .76); font.pixelSize: 13; font.bold: parent.selected; horizontalAlignment: Text.AlignLeft; verticalAlignment: Text.AlignVCenter } onClicked: backend.openSettingsTab(parent.modelData) }
                             }
                         }
                         Item { Layout.fillHeight: true }
                     }
                 }
-                Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: root.c.hover; opacity: 0.75 }
                 Panel {
-                    Layout.fillWidth: true; Layout.fillHeight: true; color: "transparent"; radius: 0
-                    Loader { anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 12; anchors.topMargin: 18; anchors.bottomMargin: 18; sourceComponent: backend.settingsTab === "My Profile" ? profileSettings : backend.settingsTab === "General" ? generalSettings : backend.settingsTab === "Appearance" ? appearanceSettings : backend.settingsTab === "Privacy" ? privacySettings : backend.settingsTab === "Notifications" ? notificationSettings : aboutSettings }
+                    Layout.fillWidth: true; Layout.fillHeight: true; color: root.alphaColor(root.c.panel, Math.max(.82, backend.panelOpacity)); radius: root.corner
+                    Loader { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 18; anchors.topMargin: 18; anchors.bottomMargin: 18; sourceComponent: backend.settingsTab === "My Profile" ? profileSettings : backend.settingsTab === "General" ? generalSettings : backend.settingsTab === "Appearance" ? appearanceSettings : backend.settingsTab === "Privacy" ? privacySettings : backend.settingsTab === "Notifications" ? notificationSettings : aboutSettings }
                 }
             }
         }
@@ -751,9 +788,9 @@ ApplicationWindow {
                     AppButton { Layout.fillWidth: true; text: "Banner color"; onClicked: backend.chooseBannerColor() }
                 }
                 RowLayout { visible: backend.profileBannerUrl !== "" || backend.profileBackgroundUrl !== ""; AppButton { text: "Remove banner image"; quiet: true; visible: backend.profileBannerUrl !== ""; onClicked: backend.clearMedia("profile_banner") } AppButton { text: "Remove profile background"; quiet: true; visible: backend.profileBackgroundUrl !== ""; onClicked: backend.clearMedia("profile_background") } }
-                AppText { text: "DISPLAY NAME"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                FieldLabel { text: "DISPLAY NAME" }
                 AppField { id: displayName; Layout.fillWidth: true; text: backend.displayName; placeholderText: "How people see you" }
-                AppText { text: "DISPLAY NAME FONT"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                FieldLabel { text: "DISPLAY NAME FONT" }
                 ComboBox {
                     id: displayFont; Layout.preferredWidth: 220; model: backend.displayFontOptions
                     textRole: "name"; valueRole: "family"; font.family: currentValue || backend.displayFont
@@ -763,18 +800,18 @@ ApplicationWindow {
                     contentItem: AppText { text: displayFont.displayText; font.family: displayFont.currentValue || backend.displayFont; verticalAlignment: Text.AlignVCenter }
                     indicator: AppText { x: displayFont.width - width - 12; anchors.verticalCenter: parent.verticalCenter; text: "⌄"; color: root.c.muted; font.pixelSize: 16 }
                     background: Rectangle {
-                        radius: Math.max(4, root.corner - 2); color: root.alphaColor(root.buttonSurface, backend.controlOpacity)
-                        border.width: 1; border.color: displayFont.activeFocus ? root.c.accent : root.alphaColor(Qt.lighter(root.buttonSurface, 1.5), .18)
+                        radius: Math.max(4, root.corner - 2); color: root.alphaColor(root.mixColor(root.c.bg, root.buttonSurface, .18), Math.max(.9, backend.controlOpacity))
+                        border.width: displayFont.activeFocus ? 2 : 1; border.color: displayFont.activeFocus ? root.c.accent : root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .62), .55)
                     }
                 }
-                AppText { text: "PRONOUNS"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                FieldLabel { text: "PRONOUNS" }
                 AppField { id: pronouns; Layout.fillWidth: true; text: backend.pronouns; placeholderText: "Optional pronouns"; maximumLength: 40 }
-                AppText { text: "CUSTOM STATUS"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                FieldLabel { text: "CUSTOM STATUS" }
                 AppField { id: customStatus; Layout.fillWidth: true; text: backend.customStatus; placeholderText: "What are you up to?" }
-                AppText { text: "STATUS EMOJI"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                FieldLabel { text: "STATUS EMOJI" }
                 AppField { id: statusEmoji; Layout.preferredWidth: 150; text: backend.statusEmoji; placeholderText: "e.g. 🎮"; maximumLength: 8 }
-                AppText { text: "ABOUT ME"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
-                TextArea { id: bio; Layout.fillWidth: true; Layout.preferredHeight: 92; text: backend.bio; color: root.c.text; placeholderText: "Tell people about yourself"; placeholderTextColor: root.c.muted; wrapMode: TextEdit.Wrap; padding: 11; background: Rectangle { color: root.alphaColor(root.buttonSurface, backend.controlOpacity); radius: Math.max(4, root.corner - 2); border.width: 1; border.color: bio.activeFocus ? root.c.accent : root.alphaColor(Qt.lighter(root.buttonSurface, 1.5), .18) } }
+                FieldLabel { text: "ABOUT ME" }
+                TextArea { id: bio; Layout.fillWidth: true; Layout.preferredHeight: 92; text: backend.bio; color: root.c.text; placeholderText: "Tell people about yourself"; placeholderTextColor: root.c.muted; wrapMode: TextEdit.Wrap; padding: 11; background: Rectangle { color: root.alphaColor(root.mixColor(root.c.bg, root.buttonSurface, .18), Math.max(.9, backend.controlOpacity)); radius: Math.max(4, root.corner - 2); border.width: bio.activeFocus ? 2 : 1; border.color: bio.activeFocus ? root.c.accent : root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .62), .55) } }
                 AppButton { text: "Save profile"; accent: true; onClicked: backend.saveProfile(displayName.text, customStatus.text, bio.text, pronouns.text, backend.bannerColor, statusEmoji.text, displayFont.currentValue) }
                 AppText { text: backend.status; color: root.c.muted; font.pixelSize: 11 }
             }
@@ -798,15 +835,15 @@ ApplicationWindow {
             RowLayout { AppButton { text: "Choose custom accent"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomAccent() } AppButton { text: "Choose background color"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomBackground() } }
             SectionLabel { text: "WALLPAPER & SURFACES"; Layout.topMargin: 12 }
             RowLayout { AppButton { text: "Choose wallpaper / GIF"; onClicked: backend.chooseWallpaper() } AppButton { text: "Remove wallpaper"; quiet: true; enabled: backend.wallpaperUrl !== ""; onClicked: backend.clearMedia("wallpaper") } }
-            AppText { text: "WALLPAPER VISIBILITY  " + Math.round(backend.wallpaperOpacity * 100) + "%"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                AppText { text: "WALLPAPER VISIBILITY  " + Math.round(backend.wallpaperOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: 0; to: 1; stepSize: .05; value: backend.wallpaperOpacity; onMoved: backend.setOpacity("wallpaper_opacity", value) }
-            AppText { text: "PANELS  " + Math.round(backend.panelOpacity * 100) + "%"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+            AppText { text: "PANELS  " + Math.round(backend.panelOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .2; to: 1; stepSize: .05; value: backend.panelOpacity; onMoved: backend.setOpacity("panel_opacity", value) }
-            AppText { text: "BUTTONS & INPUTS  " + Math.round(backend.controlOpacity * 100) + "%"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+            AppText { text: "BUTTONS & INPUTS  " + Math.round(backend.controlOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .2; to: 1; stepSize: .05; value: backend.controlOpacity; onMoved: backend.setOpacity("control_opacity", value) }
             RowLayout {
                 Rectangle { width: 34; height: 34; radius: Math.max(4, root.corner - 4); color: backend.buttonColor; border.width: 1; border.color: root.c.hover }
-                AppButton { text: "Choose buttons & inputs color"; onClicked: backend.chooseButtonColor() }
+                AppButton { text: "Choose control tint"; onClicked: backend.chooseButtonColor() }
                 AppButton { text: "Use theme default"; quiet: true; onClicked: backend.resetButtonColor() }
             }
             SectionLabel { text: "EDITOR & INTERACTION"; Layout.topMargin: 12 }
@@ -815,26 +852,26 @@ ApplicationWindow {
             SettingToggle { title: "Show Send button"; description: "Display a Send button beside the message editor."; settingKey: "show_send_button"; checked: backend.settings.show_send_button === true }
             SettingToggle { title: "Show formatting buttons"; description: "Display bold, italic, inline code, and code block controls."; settingKey: "show_formatting_buttons"; checked: backend.settings.show_formatting_buttons === true }
             SectionLabel { text: "LAYOUT"; Layout.topMargin: 12 }
-            AppText { text: "MESSAGE DENSITY"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+            AppText { text: "MESSAGE DENSITY"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             RowLayout {
                 AppButton { text: "Cozy"; accent: backend.messageDensity === "Cozy"; onClicked: backend.setMessageDensity("Cozy") }
                 AppButton { text: "Compact"; accent: backend.messageDensity === "Compact"; onClicked: backend.setMessageDensity("Compact") }
             }
-            AppText { text: "TEXT SIZE  " + Math.round(backend.fontScale * 100) + "%"; color: root.c.muted; font.pixelSize: 10; font.bold: true; Layout.topMargin: 5 }
+            AppText { text: "TEXT SIZE  " + Math.round(backend.fontScale * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true; Layout.topMargin: 5 }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .85; to: 1.25; stepSize: .05; value: backend.fontScale; onMoved: backend.setFontScale(value) }
-            AppText { text: "CORNER STYLE"; color: root.c.muted; font.pixelSize: 10; font.bold: true; Layout.topMargin: 5 }
+            AppText { text: "CORNER STYLE"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true; Layout.topMargin: 5 }
             RowLayout {
                 Repeater { model: ["Compact", "Soft", "Rounded"]
                     AppButton { required property string modelData; text: modelData; selected: backend.cornerStyle === modelData; onClicked: backend.setCornerStyle(modelData) }
                 }
             }
-            AppText { text: "CONVERSATION BACKGROUND"; color: root.c.muted; font.pixelSize: 10; font.bold: true; Layout.topMargin: 5 }
+            AppText { text: "CONVERSATION BACKGROUND"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true; Layout.topMargin: 5 }
             RowLayout {
                 Rectangle { width: 34; height: 34; radius: Math.max(4, root.corner - 4); color: backend.chatBackground; border.width: 1; border.color: root.c.hover }
                 AppButton { text: "Choose color"; onClicked: backend.chooseChatBackground() }
                 AppButton { text: "Use theme default"; quiet: true; onClicked: backend.resetChatBackground() }
             }
-            AppText { text: "CONVERSATION BACKGROUND OPACITY  " + Math.round(backend.messageBackgroundOpacity * 100) + "%"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+            AppText { text: "CONVERSATION BACKGROUND OPACITY  " + Math.round(backend.messageBackgroundOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .2; to: 1; stepSize: .05; value: backend.messageBackgroundOpacity; onMoved: backend.setOpacity("message_background_opacity", value) }
             Item { Layout.fillHeight: true }
           }
@@ -855,25 +892,35 @@ ApplicationWindow {
     component SectionLabel: AppText {
         Layout.fillWidth: true
         color: root.c.accent
-        font.pixelSize: 10
+        font.pixelSize: Math.round(11 * root.uiScale)
         font.bold: true
         font.letterSpacing: 0.7
+    }
+
+    component FieldLabel: AppText {
+        Layout.fillWidth: true
+        color: root.alphaColor(root.c.text, .82)
+        font.pixelSize: Math.round(11 * root.uiScale)
+        font.bold: true
+        font.letterSpacing: .45
+        Layout.topMargin: 3
     }
 
     component SettingToggle: Rectangle {
         id: setting; property string title; property string description; property string settingKey; property bool checked
         readonly property color stateColor: checked ? "#22c55e" : "#ef4444"
-        Layout.fillWidth: true; Layout.maximumWidth: 720; Layout.preferredHeight: 56; radius: Math.max(6, root.corner - 2)
-        color: settingArea.containsMouse ? root.c.tile : "transparent"
+        Layout.fillWidth: true; Layout.maximumWidth: 720; Layout.preferredHeight: 64; radius: Math.max(6, root.corner - 2)
+        color: root.alphaColor(settingArea.containsMouse ? Qt.lighter(root.c.tile, 1.08) : root.c.tile, settingArea.containsMouse ? .88 : .72)
+        border.width: 1; border.color: settingArea.containsMouse ? root.alphaColor(root.c.accent, .36) : root.alphaColor(root.c.text, .1)
         Behavior on color { ColorAnimation { duration: root.motion } }
         RowLayout {
-            anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 12
+            anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
             ColumnLayout {
                 Layout.fillWidth: true; spacing: 3
-                AppText { text: setting.title; font.pixelSize: 13; font.bold: true }
-                AppText { Layout.fillWidth: true; text: setting.description; color: root.c.muted; font.pixelSize: 10; elide: Text.ElideRight }
+                AppText { text: setting.title; font.pixelSize: Math.round(14 * root.uiScale); font.bold: true }
+                AppText { Layout.fillWidth: true; text: setting.description; color: root.alphaColor(root.c.text, .76); font.pixelSize: Math.round(12 * root.uiScale); elide: Text.ElideRight }
             }
-            AppText { text: setting.checked ? "ON" : "OFF"; color: setting.stateColor; font.pixelSize: 9; font.bold: true }
+            AppText { text: setting.checked ? "ON" : "OFF"; color: setting.stateColor; font.pixelSize: Math.round(10 * root.uiScale); font.bold: true }
             Rectangle {
                 Layout.preferredWidth: 44; Layout.preferredHeight: 24; radius: 12
                 color: setting.stateColor
@@ -886,7 +933,6 @@ ApplicationWindow {
                 }
             }
         }
-        Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.c.hover; opacity: 0.7 }
         MouseArea { id: settingArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: backend.setPreference(setting.settingKey, !setting.checked) }
     }
 

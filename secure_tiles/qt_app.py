@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QGuiApplication, QIcon
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Property, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QColorDialog, QFileDialog
 from nacl import secret, utils
@@ -61,6 +61,12 @@ DEMO_IDENTITY = Identity(
     __import__("hashlib").sha256(b"secure-tiles-demo-signing-v1").digest(),
 )
 DEMO_CARD = validate_card(public_card(DEMO_IDENTITY, "demo_bot"))
+DEMO_PROFILE = {
+    "display_name": "Cipher Bot", "display_font": "Consolas",
+    "custom_status": "Testing encrypted profile cards", "status_emoji": "BOT",
+    "bio": "I am the built-in echo bot. Message me to test encrypted chats and profile styling.",
+    "pronouns": "bot/bot", "banner_color": "#7c3aed",
+}
 UPDATE_API = "https://api.github.com/repos/H0l10W/secure-tiles/releases/latest"
 DEFAULT_RELAY_URL = "https://secure-tiles-relay.secure-tiles-cloudflare-relay.workers.dev"
 ATTACHMENT_CHUNK_SIZE = 1024 * 1024
@@ -75,6 +81,19 @@ DISPLAY_FONT_OPTIONS = (
     {"name": "Arcade", "family": "Trebuchet MS"},
     {"name": "Cipher", "family": "Consolas"},
 )
+
+
+def _profile_image_data(path: Path) -> str:
+    """Return a small profile-card preview that fits inside an encrypted signal."""
+    image = QImage(str(path))
+    if image.isNull(): return ""
+    image = image.scaled(320, 180, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    for quality in (72, 58, 44, 32):
+        encoded = QByteArray(); buffer = QBuffer(encoded); buffer.open(QIODevice.WriteOnly)
+        image.save(buffer, "JPG", quality); buffer.close()
+        if len(encoded) <= 14_000:
+            return "data:image/jpeg;base64," + base64.b64encode(bytes(encoded)).decode("ascii")
+    return ""
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -210,7 +229,7 @@ class Controller(QObject):
         self._typing_active = False
         self._typing_contacts: set[str] = set()
         self._presence_contacts: dict[str, str] = {}
-        self._remote_profiles: dict[str, dict[str, str]] = dict(self.preferences.get("remote_profiles", {}))
+        self._remote_profiles: dict[str, dict[str, Any]] = dict(self.preferences.get("remote_profiles", {}))
         stored_unread = self.preferences.get("unread_counts", {})
         self._unread_counts: dict[str, int] = {
             str(key): max(0, int(value)) for key, value in stored_unread.items()
@@ -275,6 +294,10 @@ class Controller(QObject):
             colors["bg"] = str(self.preferences.get("custom_background", colors["bg"]))
         return colors
 
+    @Property('QVariantMap', notify=changed)
+    def qmlColors(self):
+        return {name: QColor(value) for name, value in self.colors.items()}
+
     @Property(str, notify=changed)
     def themeName(self): return str(self.preferences.get("theme", "Midnight"))
 
@@ -296,6 +319,9 @@ class Controller(QObject):
                            "unread": self._unread_counts.get(card["signing_key"], 0)})
         return sorted(result, key=lambda card: (not card["favorite"], card["displayName"].lower()))
 
+    @Property('QVariantList', notify=changed)
+    def favoriteContacts(self): return [card for card in self.contacts if card["favorite"]]
+
     @Property(str, notify=changed)
     def selectedName(self): return self._selected["name"] if self._selected else ""
 
@@ -311,6 +337,26 @@ class Controller(QObject):
 
     @Property(str, notify=changed)
     def selectedDisplayFont(self): return str(self._remote_profiles.get(self.selectedSigningKey, {}).get("display_font", "Segoe UI"))
+
+    def _selected_profile_value(self, key: str, default: str = "") -> str:
+        return str(self._remote_profiles.get(self.selectedSigningKey, {}).get(key, default))
+
+    @Property(str, notify=changed)
+    def selectedCustomStatus(self): return self._selected_profile_value("custom_status")
+    @Property(str, notify=changed)
+    def selectedBio(self): return self._selected_profile_value("bio")
+    @Property(str, notify=changed)
+    def selectedPronouns(self): return self._selected_profile_value("pronouns")
+    @Property(str, notify=changed)
+    def selectedStatusEmoji(self): return self._selected_profile_value("status_emoji")
+    @Property(str, notify=changed)
+    def selectedBannerColor(self): return self._selected_profile_value("banner_color", self.colors["accent"])
+    @Property(str, notify=changed)
+    def selectedAvatarUrl(self): return self._selected_profile_value("avatar_data")
+    @Property(str, notify=changed)
+    def selectedProfileBannerUrl(self): return self._selected_profile_value("banner_data")
+    @Property(str, notify=changed)
+    def selectedProfileBackgroundUrl(self): return self._selected_profile_value("background_data")
 
     @Property(str, notify=changed)
     def selectedNickname(self): return str(self._selected_metadata().get("nickname", ""))
@@ -396,7 +442,16 @@ class Controller(QObject):
                 font = str(profile.get("display_font", "Segoe UI"))
                 name = str(profile.get("display_name", "")).strip()[:32]
                 if font in DISPLAY_FONTS and name:
-                    self._remote_profiles[sender["signing_key"]] = {"display_name": name, "display_font": font}
+                    cleaned = {"display_name": name, "display_font": font,
+                               "custom_status": str(profile.get("custom_status", "")).strip()[:80],
+                               "bio": str(profile.get("bio", "")).strip()[:190],
+                               "pronouns": str(profile.get("pronouns", "")).strip()[:40],
+                               "status_emoji": str(profile.get("status_emoji", "")).strip()[:8],
+                               "banner_color": str(profile.get("banner_color", ""))[:16]}
+                    for key in ("avatar_data", "banner_data", "background_data"):
+                        value = str(profile.get(key, ""))
+                        if value.startswith("data:image/") and len(value) <= 400_000: cleaned[key] = value
+                    self._remote_profiles[sender["signing_key"]] = cleaned
                     self.preferences["remote_profiles"] = self._remote_profiles
                     self.store.save_preferences(self.preferences)
             except (TypeError, ValueError, json.JSONDecodeError): pass
@@ -619,6 +674,7 @@ class Controller(QObject):
 
     def _enter_messenger(self):
         self.store.add_contact(DEMO_CARD)
+        self._remote_profiles[DEMO_CARD["signing_key"]] = dict(DEMO_PROFILE)
         self._page = "chat"; self._status = ""; self._relay_status = "Connecting..."
         self.poll_timer.start(); self.presence_timer.start(); self.poll_inbox(); self._publish_presence(); self._notify()
 
@@ -780,7 +836,15 @@ class Controller(QObject):
         if not self.identity: return
         contacts = [c for c in self.store.contacts() if c["signing_key"] != DEMO_CARD["signing_key"]]
         if not contacts: return
-        payload = PROFILE_SIGNAL_PREFIX + json.dumps({"display_name": self.displayName, "display_font": self.displayFont}, separators=(",", ":"))
+        profile = {"display_name": self.displayName, "display_font": self.displayFont,
+                   "custom_status": self.customStatus, "bio": self.bio, "pronouns": self.pronouns,
+                   "status_emoji": self.statusEmoji, "banner_color": self.bannerColor}
+        for source_key, payload_key in (("avatar", "avatar_data"), ("profile_banner", "banner_data"),
+                                        ("profile_background", "background_data")):
+            path = Path(str(self.preferences.get(source_key, "")))
+            preview = _profile_image_data(path) if path.is_file() else ""
+            if preview: profile[payload_key] = preview
+        payload = PROFILE_SIGNAL_PREFIX + json.dumps(profile, separators=(",", ":"))
         identity = self.identity
         self.run_job(lambda: [self.relay.send(encrypt_message(identity, contact, payload)) for contact in contacts], lambda _r, _e: None)
 
@@ -1101,9 +1165,11 @@ def main():
     smoke_test = "--smoke-test" in sys.argv
     if smoke_test: sys.argv.remove("--smoke-test")
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     QGuiApplication.setApplicationName("Secure Tiles")
     QGuiApplication.setOrganizationName("Secure Tiles")
     application = QApplication(sys.argv)
+    application.setFont(QFont("Segoe UI", 10))
     icon = Path(__file__).resolve().parents[1] / "assets" / "secure_tiles.ico"
     if icon.exists(): application.setWindowIcon(QIcon(str(icon)))
     controller = Controller(application)
