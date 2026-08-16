@@ -68,7 +68,7 @@ DEMO_PROFILE = {
     "bio": "I am the built-in echo bot. Message me to test encrypted chats and profile styling.",
     "pronouns": "bot/bot", "banner_color": "#7c3aed",
 }
-UPDATE_API = "https://api.github.com/repos/H0l10W/secure-tiles/releases/latest"
+UPDATE_API = "https://api.github.com/repos/H0l10W/nightseal/releases/latest"
 DEFAULT_RELAY_URL = "https://secure-tiles-relay.secure-tiles-cloudflare-relay.workers.dev"
 ATTACHMENT_CHUNK_SIZE = 1024 * 1024
 TYPING_SIGNAL_PREFIX = "\0secure-tiles-typing:"
@@ -106,7 +106,7 @@ def _version_tuple(value: str) -> tuple[int, ...]:
 
 def _release_asset_name(version: str, installed: bool) -> str:
     kind = "Setup" if installed else "Portable"
-    return f"Secure-Tiles-{kind}-v{version}.exe"
+    return f"Nightseal-{kind}-v{version}.exe"
 
 
 def _update_apply_script(mode: str) -> str:
@@ -1343,7 +1343,7 @@ class Controller(QObject):
         def work():
             request = urllib.request.Request(UPDATE_API, headers={
                 "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10",
-                "User-Agent": f"SecureTiles/{__version__}",
+                "User-Agent": f"Nightseal/{__version__}",
             })
             try:
                 with urllib.request.urlopen(request, timeout=12) as response:
@@ -1364,7 +1364,7 @@ class Controller(QObject):
                 raise ValueError("Release asset has no GitHub SHA-256 digest")
             updates = self.store.root / "updates"; updates.mkdir(parents=True, exist_ok=True)
             partial = updates / f"{asset_name}.part"
-            download = urllib.request.Request(str(asset["browser_download_url"]), headers={"User-Agent": f"SecureTiles/{__version__}"})
+            download = urllib.request.Request(str(asset["browser_download_url"]), headers={"User-Agent": f"Nightseal/{__version__}"})
             hasher = hashlib.sha256(); size = 0
             with urllib.request.urlopen(download, timeout=30) as response, partial.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
@@ -1381,7 +1381,7 @@ class Controller(QObject):
             self._checking_updates = False
             if error: self._update_status = f"Update check failed: {error}"
             elif result["state"] == "none": self._update_status = "No published releases are available yet."
-            elif result["state"] == "current": self._update_status = f"Secure Tiles {__version__} is up to date."
+            elif result["state"] == "current": self._update_status = f"Nightseal {__version__} is up to date."
             else:
                 self._update_version, self._update_stage, self._update_mode = result["version"], result["stage"], result["mode"]
                 self._update_status = f"Version {self._update_version} is downloaded and ready."
@@ -1555,11 +1555,11 @@ def main():
     if smoke_test: sys.argv.remove("--smoke-test")
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    QGuiApplication.setApplicationName("Secure Tiles")
-    QGuiApplication.setOrganizationName("Secure Tiles")
+    QGuiApplication.setApplicationName("Nightseal")
+    QGuiApplication.setOrganizationName("Nightseal")
     application = QApplication(sys.argv)
     application.setFont(QFont("Segoe UI", 10))
-    icon = Path(__file__).resolve().parents[1] / "assets" / "secure_tiles.ico"
+    icon = Path(__file__).resolve().parents[1] / "assets" / "nightseal.ico"
     if icon.exists(): application.setWindowIcon(QIcon(str(icon)))
     controller = Controller(application)
     engine = QQmlApplicationEngine()
@@ -1569,8 +1569,8 @@ def main():
     if not engine.rootObjects():
         controller.shutdown(); raise RuntimeError(f"Could not load {qml}")
     window = engine.rootObjects()[0]
-    width = max(880, min(3840, int(controller.preferences.get("window_width", 1100))))
-    height = max(580, min(2160, int(controller.preferences.get("window_height", 720))))
+    width = max(720, min(3840, int(controller.preferences.get("window_width", 1100))))
+    height = max(500, min(2160, int(controller.preferences.get("window_height", 720))))
     window.setWidth(width); window.setHeight(height)
     if smoke_test: QTimer.singleShot(1500, application.quit)
     def closing():

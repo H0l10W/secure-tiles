@@ -14,9 +14,11 @@ if (-not $Version) {
     $Version = $versionMatch.Groups[1].Value
 }
 
-$portableName = "Secure-Tiles-Portable-v$Version"
+$portableName = "Nightseal-Portable-v$Version"
 $portablePath = Join-Path $projectRoot "dist\$portableName.exe"
-$installerPath = Join-Path $projectRoot "dist\Secure-Tiles-Setup-v$Version.exe"
+$installerPath = Join-Path $projectRoot "dist\Nightseal-Setup-v$Version.exe"
+$legacyPortablePath = Join-Path $projectRoot "dist\Secure-Tiles-Portable-v$Version.exe"
+$legacyInstallerPath = Join-Path $projectRoot "dist\Secure-Tiles-Setup-v$Version.exe"
 $versionParts = $Version.Split('.')
 if ($versionParts.Count -ne 3 -or @($versionParts | Where-Object { $_ -notmatch '^\d+$' }).Count -gt 0) {
     throw "Version must contain three numeric parts."
@@ -34,7 +36,7 @@ Set-Content -LiteralPath $generatedVersionFile -Value $versionInfo -Encoding UTF
 
 python -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name $portableName `
-    --icon "assets\secure_tiles.ico" `
+    --icon "assets\nightseal.ico" `
     --version-file $generatedVersionFile `
     --add-data "secure_tiles\qml;secure_tiles\qml" `
     --add-data "assets;assets" `
@@ -55,10 +57,15 @@ if (-not $InnoCompiler -or -not (Test-Path $InnoCompiler)) {
     throw "Inno Setup 6 was not found. Install it or pass -InnoCompiler."
 }
 
-& $InnoCompiler "/DMyAppVersion=$Version" "/DBuildRoot=$projectRoot" "packaging\secure-tiles.iss"
+& $InnoCompiler "/DMyAppVersion=$Version" "/DBuildRoot=$projectRoot" "packaging\nightseal.iss"
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed." }
 
-foreach ($artifact in @($portablePath, $installerPath)) {
+# Publish one transition release under both names so existing Secure Tiles
+# clients can discover the Nightseal update before switching asset names.
+Copy-Item -LiteralPath $portablePath -Destination $legacyPortablePath -Force
+Copy-Item -LiteralPath $installerPath -Destination $legacyInstallerPath -Force
+
+foreach ($artifact in @($portablePath, $installerPath, $legacyPortablePath, $legacyInstallerPath)) {
     if (-not (Test-Path $artifact)) { throw "Missing release artifact: $artifact" }
     $item = Get-Item $artifact
     $hash = Get-FileHash $artifact -Algorithm SHA256

@@ -1,4 +1,4 @@
-"""Out-of-process, recoverable installer for verified Secure Tiles releases."""
+"""Out-of-process, recoverable installer for verified Nightseal releases."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def _safe_app_root(value: str) -> Path:
     if root == Path(root.anchor) or root == Path.home().resolve():
         raise ValueError("Refusing to update a broad filesystem location")
     if not (root / "main.py").is_file() or not (root / "secure_tiles").is_dir():
-        raise ValueError("Target is not a Secure Tiles installation")
+        raise ValueError("Target is not a Nightseal installation")
     return root
 
 

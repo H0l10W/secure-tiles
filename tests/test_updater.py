@@ -24,8 +24,8 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(_version_tuple("not-a-version"), ())
 
     def test_release_asset_names_match_packaged_builds(self):
-        self.assertEqual(_release_asset_name("0.2.0", True), "Secure-Tiles-Setup-v0.2.0.exe")
-        self.assertEqual(_release_asset_name("0.2.0", False), "Secure-Tiles-Portable-v0.2.0.exe")
+        self.assertEqual(_release_asset_name("0.2.0", True), "Nightseal-Setup-v0.2.0.exe")
+        self.assertEqual(_release_asset_name("0.2.0", False), "Nightseal-Portable-v0.2.0.exe")
 
     def test_update_script_avoids_reserved_pid_and_relaunches(self):
         for mode in ("installer", "portable"):

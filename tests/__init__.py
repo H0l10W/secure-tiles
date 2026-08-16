@@ -1,1 +1,1 @@
-"""Secure Tiles test suite."""
+"""Nightseal test suite."""

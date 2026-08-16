@@ -1,4 +1,4 @@
-name: Test and publish release
+name: Nightseal test and release
 
 on:
   push:
@@ -53,8 +53,10 @@ jobs:
             Write-Host "$tag already exists; bump secure_tiles/__init__.py for a new release."
           } else {
             gh release create $tag `
+              "dist/Nightseal-Setup-v${{ steps.version.outputs.version }}.exe" `
+              "dist/Nightseal-Portable-v${{ steps.version.outputs.version }}.exe" `
               "dist/Secure-Tiles-Setup-v${{ steps.version.outputs.version }}.exe" `
               "dist/Secure-Tiles-Portable-v${{ steps.version.outputs.version }}.exe" `
               "CHANGELOG.md" `
-              --title "Secure Tiles $tag" --generate-notes --target $env:GITHUB_SHA
+              --title "Nightseal $tag" --generate-notes --target $env:GITHUB_SHA
           }

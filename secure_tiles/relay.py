@@ -21,7 +21,7 @@ class RelayClient:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(
             self.base_url + path, data=data, method=method,
-            headers={"Content-Type": "application/json", "User-Agent": "SecureTiles/0.2"},
+            headers={"Content-Type": "application/json", "User-Agent": "Nightseal/0.2"},
         )
         try:
             timeout = 120 if "/attachments/" in path or (data and len(data) > 1_000_000) else 8

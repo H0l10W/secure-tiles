@@ -7,10 +7,11 @@ ApplicationWindow {
     id: root
     visible: true
     flags: Qt.Window | Qt.FramelessWindowHint
-    minimumWidth: 880
-    minimumHeight: 580
-    title: "Secure Tiles"
+    minimumWidth: 720
+    minimumHeight: 500
+    title: "Nightseal"
     color: backend.qmlColors.bg
+    Overlay.modal: Rectangle { color: "#99060709"; Behavior on opacity { NumberAnimation { duration: root.motion } } }
 
     property var c: backend.qmlColors
     property int motion: backend.animationsEnabled ? 115 : 0
@@ -20,6 +21,19 @@ ApplicationWindow {
     property color buttonSurface: backend.buttonColor
     property color messageSurface: backend.chatBackground
     property bool favoritesOnly: false
+    readonly property bool narrowWindow: width < 940
+    readonly property bool veryNarrowWindow: width < 800
+    readonly property int spaceXs: 4
+    readonly property int spaceSm: 8
+    readonly property int spaceMd: 12
+    readonly property int spaceLg: 16
+    readonly property int spaceXl: 24
+    readonly property int controlHeight: 40
+    readonly property int compactControlHeight: 32
+    readonly property int headerHeight: 52
+    readonly property int bodySize: Math.round(14 * root.uiScale)
+    readonly property int captionSize: Math.round(11 * root.uiScale)
+    readonly property int titleSize: Math.round(21 * root.uiScale)
     property color strongSurface: root.alphaColor(root.c.panel, Math.max(.84, backend.panelOpacity))
     property color softSurface: root.alphaColor(root.c.panel, Math.max(.68, backend.panelOpacity))
     function validColor(value) {
@@ -35,6 +49,13 @@ ApplicationWindow {
         if (!validColor(b)) b = a
         return Qt.rgba(a.r + (b.r - a.r) * amount, a.g + (b.g - a.g) * amount,
                        a.b + (b.b - a.b) * amount, a.a + (b.a - a.a) * amount)
+    }
+    function statusNeedsAttention(value) {
+        if (!value) return false
+        var message = value.toLowerCase()
+        return message.indexOf("could not") >= 0 || message.indexOf("failed") >= 0
+               || message.indexOf("not sent") >= 0 || message.indexOf("warning") >= 0
+               || message.indexOf("invalid") >= 0 || message.indexOf("limited to") >= 0
     }
 
     Popup {
@@ -58,7 +79,7 @@ ApplicationWindow {
         onClosed: imageSource = ""
         background: Rectangle { color: "#e60a0b0d" }
         contentItem: Item {
-            AppButton { anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 18; text: "Close"; Layout.preferredWidth: 70; z: 3; onClicked: imageViewer.close() }
+            AppButton { anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 18; text: "Close"; iconGlyph: "\uE8BB"; z: 3; onClicked: imageViewer.close() }
             Flickable {
                 id: imageViewport
                 anchors.fill: parent; anchors.topMargin: 58; anchors.bottomMargin: 64; anchors.leftMargin: 20; anchors.rightMargin: 20
@@ -101,6 +122,32 @@ ApplicationWindow {
         renderType: Text.NativeRendering
     }
 
+    component AppIcon: Text {
+        color: root.c.text
+        font.family: "Segoe Fluent Icons"
+        font.pixelSize: Math.round(15 * root.uiScale)
+        horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
+        renderType: Text.NativeRendering
+    }
+
+    component BrandLogo: Item {
+        property int logoSize: 24
+        width: logoSize
+        height: logoSize
+        implicitWidth: logoSize
+        implicitHeight: logoSize
+        Image {
+            anchors.fill: parent
+            source: "../../assets/nightseal-logo.png"
+            sourceSize.width: 256
+            sourceSize.height: 256
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+            mipmap: true
+        }
+    }
+
     component AppButton: Button {
         id: control
         property bool accent: false
@@ -108,44 +155,73 @@ ApplicationWindow {
         property bool quiet: false
         property bool selected: false
         property color textColor: root.c.text
-        implicitHeight: 38
-        implicitWidth: Math.max(70, contentItem.implicitWidth + 28)
+        property string iconGlyph: ""
+        property real iconOffsetX: 0
+        property real iconOffsetY: 0
+        property bool iconOnly: text === "" && iconGlyph !== ""
+        Accessible.name: text !== "" ? text : ToolTip.text
+        implicitHeight: root.controlHeight
+        implicitWidth: iconOnly ? implicitHeight : Math.max(72, contentItem.implicitWidth + 30)
+        leftPadding: 15; rightPadding: 15
+        opacity: enabled ? 1 : .46
         hoverEnabled: true
         font.family: "Segoe UI"
         font.pixelSize: Math.round(13 * root.uiScale)
         font.hintingPreference: Font.PreferFullHinting
-        scale: down ? .98 : 1
+        scale: down ? .975 : hovered ? 1.012 : 1
         Behavior on scale { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
-        contentItem: Text {
-            text: control.text
-            color: control.textColor
-            font: control.font
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            renderType: Text.NativeRendering
+        Behavior on opacity { NumberAnimation { duration: root.motion } }
+        contentItem: RowLayout {
+            spacing: control.text !== "" ? 7 : 0
+            Item { Layout.fillWidth: true }
+            AppIcon { visible: control.iconGlyph !== ""; text: control.iconGlyph; color: control.textColor; font.pixelSize: Math.round(15 * root.uiScale); transform: Translate { x: control.iconOffsetX; y: control.iconOffsetY } }
+            Text {
+                visible: control.text !== ""
+                text: control.text; color: control.textColor; font: control.font
+                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                renderType: Text.NativeRendering
+            }
+            Item { Layout.fillWidth: true }
         }
         background: Rectangle {
             id: buttonBackground
             readonly property bool quietIdle: control.quiet && !control.hovered && !control.down && !control.selected
-            readonly property real surfaceOpacity: backend.controlOpacity * (control.accent || control.danger || control.selected ? .82 : control.quiet ? (control.hovered || control.down ? .5 : .12) : control.hovered ? .92 : .76)
-            readonly property color neutralTint: root.mixColor(root.c.tile, root.buttonSurface, control.hovered || control.down ? .36 : .28)
-            readonly property color stateTint: root.mixColor(root.c.tile, root.c.accent, control.down ? .38 : control.hovered ? .3 : .23)
-            readonly property color baseColor: control.danger ? root.mixColor(root.c.tile, root.c.danger, control.hovered || control.down ? .5 : .38) : control.accent || control.selected ? stateTint : control.hovered || control.down ? Qt.lighter(neutralTint, 1.1) : neutralTint
-            radius: Math.max(4, root.corner - 2)
-            border.width: quietIdle ? 0 : 1
-            border.color: control.danger ? root.alphaColor(root.c.danger, .9) : control.accent || control.selected ? root.alphaColor(root.c.accent, .78) : root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .55), .34)
-            color: root.alphaColor(baseColor, surfaceOpacity)
-            gradient: Gradient {
-                GradientStop { position: 0; color: root.alphaColor(Qt.lighter(buttonBackground.baseColor, 1.04), buttonBackground.surfaceOpacity) }
-                GradientStop { position: 1; color: root.alphaColor(buttonBackground.baseColor, buttonBackground.surfaceOpacity) }
-            }
+            readonly property color neutralTint: root.mixColor(root.c.tile, root.buttonSurface, control.hovered ? .38 : .28)
+            readonly property color actionTint: control.danger ? root.c.danger : root.c.accent
+            radius: Math.max(7, root.corner - 1)
+            border.width: control.activeFocus || !quietIdle ? 1 : 0
+            border.color: control.activeFocus ? root.alphaColor(actionTint, .95)
+                         : control.danger || control.accent || control.selected ? root.alphaColor(actionTint, control.hovered ? .9 : .66)
+                         : root.alphaColor(root.c.text, control.hovered ? .26 : .16)
+            color: quietIdle ? "transparent"
+                 : control.danger || control.accent || control.selected
+                   ? root.alphaColor(root.mixColor(root.c.tile, actionTint, control.down ? .52 : control.hovered ? .42 : .32), Math.max(.82, backend.controlOpacity))
+                   : root.alphaColor(control.down ? Qt.darker(neutralTint, 1.08) : control.hovered ? Qt.lighter(neutralTint, 1.08) : neutralTint, Math.max(.72, backend.controlOpacity))
             Behavior on color { ColorAnimation { duration: root.motion } }
+            Behavior on border.color { ColorAnimation { duration: root.motion } }
         }
+        HoverHandler { cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor }
+    }
+
+    component ScreenHeader: RowLayout {
+        property string title: ""
+        property string subtitle: ""
+        property string backText: "Back"
+        signal back()
+        Layout.fillWidth: true
+        Layout.preferredHeight: root.headerHeight
+        spacing: root.spaceMd
+        ColumnLayout {
+            Layout.fillWidth: true; spacing: 2
+            AppText { Layout.fillWidth: true; text: parent.parent.title; font.pixelSize: root.titleSize; font.bold: true; elide: Text.ElideRight }
+            AppText { visible: parent.parent.subtitle !== "" && !root.veryNarrowWindow; Layout.fillWidth: true; text: parent.parent.subtitle; color: root.c.muted; font.pixelSize: root.captionSize; elide: Text.ElideRight }
+        }
+        AppButton { text: parent.backText; iconGlyph: "\uE72B"; quiet: true; onClicked: parent.back() }
     }
 
     component AppField: TextField {
         id: field
-        implicitHeight: 38
+        implicitHeight: root.controlHeight
         color: root.c.text
         placeholderTextColor: root.c.muted
         selectionColor: root.c.accent
@@ -184,7 +260,7 @@ ApplicationWindow {
 
     component AppComboBox: ComboBox {
         id: combo
-        implicitHeight: 38; implicitWidth: 150
+        implicitHeight: root.controlHeight; implicitWidth: 150
         leftPadding: 12; rightPadding: 36
         font.family: "Segoe UI"; font.pixelSize: Math.round(13 * root.uiScale)
         contentItem: Text { text: combo.displayText; color: combo.enabled ? root.c.text : root.c.muted; font: combo.font; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; renderType: Text.NativeRendering }
@@ -244,8 +320,8 @@ ApplicationWindow {
             Item {
                 Layout.fillWidth: true; Layout.fillHeight: true
                 RowLayout { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; anchors.leftMargin: 12; spacing: 8
-                    AppText { text: "◆"; color: root.c.accent; font.pixelSize: 8 }
-                    AppText { text: "SECURE TILES"; font.pixelSize: 10; font.bold: true }
+                    BrandLogo { logoSize: 18 }
+                    AppText { text: "NIGHTSEAL"; font.pixelSize: 10; font.bold: true }
                 }
                 MouseArea {
                     anchors.fill: parent
@@ -255,18 +331,18 @@ ApplicationWindow {
             }
             Rectangle {
                 Layout.preferredWidth: 46; Layout.fillHeight: true; color: minimizeArea.containsMouse ? root.c.hover : "transparent"
-                AppText { anchors.centerIn: parent; text: "—"; font.pixelSize: 13 }
-                MouseArea { id: minimizeArea; anchors.fill: parent; hoverEnabled: true; onClicked: root.showMinimized() }
+                AppIcon { anchors.centerIn: parent; text: "\uE921"; font.pixelSize: 12 }
+                MouseArea { id: minimizeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.showMinimized() }
             }
             Rectangle {
                 Layout.preferredWidth: 46; Layout.fillHeight: true; color: maximizeArea.containsMouse ? root.c.hover : "transparent"
-                AppText { anchors.centerIn: parent; text: root.visibility === Window.Maximized ? "❐" : "□"; font.pixelSize: 13 }
-                MouseArea { id: maximizeArea; anchors.fill: parent; hoverEnabled: true; onClicked: root.visibility === Window.Maximized ? root.showNormal() : root.showMaximized() }
+                AppIcon { anchors.centerIn: parent; text: root.visibility === Window.Maximized ? "\uE923" : "\uE922"; font.pixelSize: 12 }
+                MouseArea { id: maximizeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.visibility === Window.Maximized ? root.showNormal() : root.showMaximized() }
             }
             Rectangle {
                 Layout.preferredWidth: 46; Layout.fillHeight: true; color: closeArea.containsMouse ? "#c42b1c" : "transparent"
-                AppText { anchors.centerIn: parent; text: "×"; font.pixelSize: 18 }
-                MouseArea { id: closeArea; anchors.fill: parent; hoverEnabled: true; onClicked: root.close() }
+                AppIcon { anchors.centerIn: parent; text: "\uE8BB"; font.pixelSize: 12 }
+                MouseArea { id: closeArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.close() }
             }
         }
     }
@@ -308,12 +384,15 @@ ApplicationWindow {
             AnimatedImage { anchors.fill: parent; source: backend.wallpaperUrl; fillMode: Image.PreserveAspectCrop; opacity: backend.wallpaperOpacity; visible: source !== "" }
             Panel {
                 width: Math.min(440, parent.width - 48)
-                height: backend.hasVault ? 410 : 470
+                height: Math.min(backend.hasVault ? 410 : 470, parent.height - 32)
                 anchors.centerIn: parent
                 radius: 18
                 ColumnLayout {
-                    anchors.fill: parent; anchors.margins: 38; spacing: 10
-                    AppText { text: "SECURE TILES"; font.pixelSize: 25; font.bold: true }
+                    anchors.fill: parent; anchors.margins: parent.width < 380 ? 24 : 38; spacing: 10
+                    RowLayout { spacing: 10
+                        BrandLogo { logoSize: 44 }
+                        AppText { text: "NIGHTSEAL"; font.pixelSize: 25; font.bold: true }
+                    }
                     AppText { text: "Private conversations. Keys stay yours."; color: root.c.muted }
                     Item { Layout.preferredHeight: 10 }
                     AppText { text: backend.hasVault ? "Welcome back, " + backend.vaultName : "Create your account"; font.pixelSize: 18; font.bold: true }
@@ -347,13 +426,18 @@ ApplicationWindow {
             Shortcut { sequence: "Escape"; onActivated: { profilePopup.close(); presencePopup.close(); if (backend.page !== "chat") backend.openPage("chat") } }
             Rectangle { anchors.fill: parent; color: root.c.bg }
             AnimatedImage { anchors.fill: parent; source: backend.wallpaperUrl; fillMode: Image.PreserveAspectCrop; opacity: backend.wallpaperOpacity; visible: source !== "" }
-            ColumnLayout {
+            Panel {
+                id: windowPanel
+                anchors.fill: parent
+                radius: 0; border.width: 0
+                color: root.alphaColor(root.c.panel, backend.panelOpacity)
+                ColumnLayout {
                 anchors.fill: parent; anchors.margins: 14; spacing: 10
-                Panel {
-                    Layout.fillWidth: true; Layout.preferredHeight: 48; color: root.strongSurface
+                Item {
+                    Layout.fillWidth: true; Layout.preferredHeight: 48
                     RowLayout { anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 14; spacing: 9
-                        Rectangle { width: 9; height: 9; radius: 3; rotation: 45; color: root.c.accent }
-                        AppText { text: "SECURE TILES"; font.pixelSize: 16; font.bold: true; font.letterSpacing: .4 }
+                        BrandLogo { logoSize: 26 }
+                        AppText { text: "NIGHTSEAL"; font.pixelSize: 16; font.bold: true; font.letterSpacing: .4 }
                         Rectangle { width: 1; height: 18; color: root.alphaColor(root.c.text, .16) }
                         AppText { text: backend.displayName; color: root.c.muted; font.family: backend.displayFont; font.pixelSize: 12; font.bold: true }
                         Item { Layout.fillWidth: true }
@@ -363,8 +447,8 @@ ApplicationWindow {
                 }
                 RowLayout {
                     Layout.fillWidth: true; Layout.fillHeight: true; spacing: 10
-                    Panel {
-                        Layout.preferredWidth: 64; Layout.fillHeight: true; color: root.strongSurface
+                    Item {
+                        Layout.preferredWidth: 64; Layout.fillHeight: true
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 8
                             ListView { id: serverRailList; Layout.fillWidth: true; Layout.fillHeight: true; spacing: 7; clip: true; model: backend.serverRailItems
                                 delegate: Item {
@@ -442,10 +526,12 @@ ApplicationWindow {
                                         AppMenuItem { text: "Change folder icon"; onTriggered: backend.chooseServerFolderIcon(modelData.id) }
                                         AppMenuItem { text: "Remove folder icon"; enabled: (modelData.icon || "") !== ""; onTriggered: backend.removeServerFolderIcon(modelData.id) }
                                         AppMenuSeparator { }
-                                        AppMenuItem { text: "Customize folder: Violet"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#7c3aed") }
-                                        AppMenuItem { text: "Customize folder: Blue"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#2563eb") }
-                                        AppMenuItem { text: "Customize folder: Green"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#16a34a") }
-                                        AppMenuItem { text: "Customize folder: Rose"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#e11d48") }
+                                        AppMenu { title: "Color"
+                                            AppMenuItem { text: "Violet"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#7c3aed") }
+                                            AppMenuItem { text: "Blue"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#2563eb") }
+                                            AppMenuItem { text: "Green"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#16a34a") }
+                                            AppMenuItem { text: "Rose"; onTriggered: backend.customizeServerFolder(modelData.id, modelData.name, "#e11d48") }
+                                        }
                                     }
                                 }
                                 footer: DropArea { width: serverRailList.width; height: Math.max(28, serverRailList.height - y)
@@ -453,13 +539,13 @@ ApplicationWindow {
                                     onDropped: function(drop) { if (drop.source && drop.source.serverId) backend.moveServerOutOfFolder(drop.source.serverId); drop.acceptProposedAction() }
                                 }
                             }
-                            AppButton { text: "+"; Layout.preferredWidth: 50; Layout.preferredHeight: 42; onClicked: serverCreatePopup.open(); ToolTip.visible: hovered; ToolTip.text: "Create or join a server" }
+                            AppButton { text: ""; iconGlyph: "\uE710"; Layout.preferredWidth: 50; Layout.preferredHeight: 42; onClicked: serverCreatePopup.open(); ToolTip.visible: hovered; ToolTip.text: "Create or join a server" }
                         }
                     }
-                    Popup { id: serverCreatePopup; parent: Overlay.overlay; anchors.centerIn: parent; width: 420; modal: true; focus: true; padding: 20
+                    Popup { id: serverCreatePopup; parent: Overlay.overlay; anchors.centerIn: parent; width: Math.min(420, root.width - 32); modal: true; focus: true; padding: 20
                         background: Rectangle { color: root.c.panel; radius: root.corner; border.color: root.alphaColor(root.c.text, .16) }
                         ColumnLayout { width: parent.width; spacing: 10
-                            AppText { text: "Create or join a server"; font.pixelSize: 20; font.bold: true }
+                            RowLayout { Layout.fillWidth: true; AppText { text: "Create or join a server"; font.pixelSize: 20; font.bold: true; Layout.fillWidth: true } AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; ToolTip.visible: hovered; ToolTip.text: "Close"; onClicked: serverCreatePopup.close() } }
                             SectionLabel { text: "CREATE" }
                             AppField { id: createServerName; Layout.fillWidth: true; placeholderText: "Server name" }
                             AppButton { text: "Create server"; accent: true; enabled: createServerName.text.trim() !== ""; onClicked: { backend.createServer(createServerName.text); createServerName.text = ""; serverCreatePopup.close() } }
@@ -489,23 +575,22 @@ ApplicationWindow {
                     }
                     Panel {
                         id: sidebar
-                        SplitView.minimumWidth: backend.sidebarExpanded ? 230 : 64
+                        SplitView.minimumWidth: backend.sidebarExpanded ? 196 : 64
                         SplitView.maximumWidth: backend.sidebarExpanded ? 420 : 64
                         SplitView.preferredWidth: backend.sidebarExpanded ? backend.sidebarWidth : 64
                         color: root.strongSurface
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 9; spacing: 8
                             RowLayout {
-                                Layout.fillWidth: true
-                                AppButton { visible: backend.sidebarExpanded; text: "People"; quiet: true; selected: !root.favoritesOnly; Layout.preferredWidth: 76; onClicked: root.favoritesOnly = false }
-                                AppButton { visible: backend.sidebarExpanded; text: "Favorites"; quiet: true; selected: root.favoritesOnly; Layout.preferredWidth: 88; onClicked: root.favoritesOnly = true }
-                                Item { Layout.fillWidth: true }
-                                AppButton { Layout.preferredWidth: 42; text: backend.sidebarExpanded ? "‹" : "›"; font.pixelSize: 20; ToolTip.visible: hovered; ToolTip.text: backend.sidebarExpanded ? "Collapse people" : "Expand people"; onClicked: backend.toggleSidebar() }
+                                Layout.fillWidth: true; spacing: 5
+                                AppButton { visible: backend.sidebarExpanded; text: "People"; quiet: true; selected: !root.favoritesOnly; Layout.fillWidth: true; Layout.minimumWidth: 0; onClicked: root.favoritesOnly = false }
+                                AppButton { visible: backend.sidebarExpanded; text: sidebar.width >= 245 ? "Favorites" : "Faves"; quiet: true; selected: root.favoritesOnly; Layout.fillWidth: true; Layout.minimumWidth: 0; onClicked: root.favoritesOnly = true }
+                                AppButton { Layout.preferredWidth: 38; Layout.minimumWidth: 38; leftPadding: 0; rightPadding: 0; text: ""; iconGlyph: backend.sidebarExpanded ? "\uE76B" : "\uE76C"; ToolTip.visible: hovered; ToolTip.text: backend.sidebarExpanded ? "Collapse people" : "Expand people"; onClicked: backend.toggleSidebar() }
                             }
                             RowLayout {
                                 visible: backend.sidebarExpanded; Layout.fillWidth: true; spacing: 6
                                 AppField { id: contactSearch; Layout.fillWidth: true; placeholderText: "Add by username"; onAccepted: backend.addContact(text) }
-                                AppButton { text: "+"; accent: true; Layout.preferredWidth: 42; ToolTip.visible: hovered; ToolTip.text: "Add by username"; onClicked: backend.addContact(contactSearch.text) }
+                                AppButton { text: ""; iconGlyph: "\uE710"; accent: true; Layout.preferredWidth: 42; ToolTip.visible: hovered; ToolTip.text: "Add by username"; onClicked: backend.addContact(contactSearch.text) }
                             }
                             ListView {
                                 id: contactList
@@ -517,17 +602,18 @@ ApplicationWindow {
                                     id: contactButton
                                     required property var modelData
                                     width: ListView.view.width; height: 44
-                                    accent: backend.selectedSigningKey === modelData.signing_key
+                                    selected: backend.selectedSigningKey === modelData.signing_key
                                     leftPadding: 8; rightPadding: 10
                                     contentItem: RowLayout {
                                         spacing: 9
+                                        Rectangle { Layout.preferredWidth: 3; Layout.preferredHeight: 24; radius: 2; color: contactButton.selected ? root.c.accent : "transparent" }
                                         Rectangle {
                                             Layout.preferredWidth: 28; Layout.preferredHeight: 28; radius: 14
-                                            color: contactButton.accent ? root.c.bg : root.c.hover
+                                            color: contactButton.selected ? root.alphaColor(root.c.accent, .2) : root.c.hover
                                             AppText {
                                                 anchors.centerIn: parent
                                                 text: modelData.initials
-                                                color: contactButton.accent ? root.c.accent : root.c.text
+                                                color: contactButton.selected ? root.c.accent : root.c.text
                                                 font.pixelSize: 10; font.bold: true
                                             }
                                             StatusBadge { status: modelData.presence; size: 11; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.rightMargin: -2; anchors.bottomMargin: -2 }
@@ -555,18 +641,19 @@ ApplicationWindow {
                     }
                     Panel {
                         SplitView.fillWidth: true
-                        SplitView.minimumWidth: 500
+                        SplitView.minimumWidth: 420
                         color: root.softSurface
                         Loader { anchors.fill: parent; anchors.margins: 18; sourceComponent: backend.page === "server" ? serverView : backend.page === "settings" ? settingsView : backend.page === "contact" ? contactView : backend.page === "friends" ? friendsView : chatView }
                     }
                 }
                 }
+                }
             }
 
-            Panel {
+            Rectangle {
                 id: identityBar
                 x: 97; y: parent.height - height - 23; width: backend.sidebarExpanded ? Math.max(46, sidebar.width - 18) : 46; height: 50
-                color: root.alphaColor(root.c.tile, .96); z: 10; clip: true
+                color: "transparent"; z: 10; clip: true
                 Behavior on width { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
                 RowLayout {
                     anchors.fill: parent; anchors.margins: 5; spacing: 7
@@ -582,7 +669,7 @@ ApplicationWindow {
                         }
                         MouseArea { id: identityArea; anchors.fill: parent; hoverEnabled: true; onClicked: profilePopup.open() }
                     }
-                    AppButton { visible: backend.sidebarExpanded; Layout.preferredWidth: 40; text: "⚙"; font.pixelSize: 17; ToolTip.visible: hovered; ToolTip.text: "User Settings"; onClicked: backend.openSettingsTab("My Profile") }
+                    AppButton { visible: backend.sidebarExpanded; Layout.preferredWidth: 40; text: ""; iconGlyph: "\uE713"; iconOffsetX: -1; ToolTip.visible: hovered; ToolTip.text: "User settings"; onClicked: backend.openSettingsTab("My Profile") }
                 }
             }
 
@@ -647,23 +734,29 @@ ApplicationWindow {
             spacing: 8
             RowLayout {
                 Layout.fillWidth: true
-                ColumnLayout { spacing: 2
-                    AppText { text: backend.selectedName ? backend.selectedDisplayName : "Choose someone to start"; font.family: backend.selectedDisplayFont; font.pixelSize: 21; font.bold: true }
+                ColumnLayout { Layout.fillWidth: true; spacing: 2
+                    AppText { Layout.fillWidth: true; elide: Text.ElideRight; text: backend.selectedName ? backend.selectedDisplayName : "Choose someone to start"; font.family: backend.selectedDisplayFont; font.pixelSize: 21; font.bold: true }
                     AppText { visible: backend.selectedName !== "" && backend.selectedDisplayName !== backend.selectedName; text: "@" + backend.selectedName; color: root.c.muted; font.pixelSize: 10 }
-                    AppText { text: backend.selectedName ? "End-to-end encrypted. Open Profile to verify identity." : "Messages are encrypted before leaving this device."; color: root.c.muted; font.pixelSize: 13 }
+                    AppText { visible: !root.veryNarrowWindow; Layout.fillWidth: true; elide: Text.ElideRight; text: backend.selectedName ? "End-to-end encrypted. Open Profile to verify identity." : "Messages are encrypted before leaving this device."; color: root.c.muted; font.pixelSize: 13 }
                 }
-                Item { Layout.fillWidth: true }
                 RowLayout {
                     visible: backend.selectedName !== ""; Layout.alignment: Qt.AlignTop; spacing: 6
-                    AppField { Layout.preferredWidth: 190; implicitHeight: 36; placeholderText: "Search messages"; onTextChanged: chatRoot.searchQuery = text.toLowerCase() }
+                    AppField { visible: !root.narrowWindow; Layout.preferredWidth: 170; implicitHeight: 36; placeholderText: "Search messages"; onTextChanged: chatRoot.searchQuery = text.toLowerCase() }
                     AppButton { text: "Profile"; Layout.preferredHeight: 36; ToolTip.visible: hovered; ToolTip.text: "View identity and safety number"; onClicked: backend.openPage("contact") }
                 }
             }
             ListView {
                 id: history; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: root.compactMessages ? 3 : 9
+                property bool followTail: true
                 model: backend.messages
                 Rectangle { parent: history; anchors.fill: parent; color: root.alphaColor(root.messageSurface, backend.messageBackgroundOpacity); radius: root.corner; z: -1 }
-                onCountChanged: Qt.callLater(positionViewAtEnd)
+                onCountChanged: {
+                    if (followTail) Qt.callLater(positionViewAtEnd)
+                }
+                onContentHeightChanged: {
+                    if (followTail) Qt.callLater(positionViewAtEnd)
+                }
+                onMovementEnded: followTail = atYEnd
                 header: Item {
                     width: history.width; height: history.count === 0 ? Math.max(180, history.height * .65) : 0
                     ColumnLayout { anchors.centerIn: parent; visible: history.count === 0; spacing: 7
@@ -739,7 +832,7 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        AppButton { visible: messageHover.hovered && messageRow.modelData.plainText !== ""; text: "Copy"; quiet: true; Layout.preferredWidth: 54; Layout.preferredHeight: 30; onClicked: backend.copyText(messageRow.modelData.plainText) }
+                        AppButton { visible: messageHover.hovered && messageRow.modelData.plainText !== ""; text: ""; iconGlyph: "\uE8C8"; quiet: true; Layout.preferredWidth: 32; Layout.preferredHeight: 30; ToolTip.visible: hovered; ToolTip.text: "Copy message"; onClicked: backend.copyText(messageRow.modelData.plainText) }
                     }
                     HoverHandler { id: messageHover }
                 }
@@ -771,15 +864,15 @@ ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 7; spacing: 4
                     RowLayout {
-                        spacing: 2
-                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "B"; quiet: true; font.bold: true; Layout.preferredWidth: 30; Layout.preferredHeight: 28; onClicked: composerPanel.format("**") }
-                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "I"; quiet: true; font.italic: true; Layout.preferredWidth: 30; Layout.preferredHeight: 28; onClicked: composerPanel.format("*") }
-                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "</>"; quiet: true; Layout.preferredWidth: 38; Layout.preferredHeight: 28; onClicked: composerPanel.format("`") }
-                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "Code"; quiet: true; Layout.preferredWidth: 46; Layout.preferredHeight: 28; onClicked: composerPanel.format("```") }
-                        AppButton { text: "Attach"; quiet: true; Layout.preferredWidth: 58; Layout.preferredHeight: 28; enabled: backend.selectedName !== ""; onClicked: backend.chooseAttachments() }
+                        spacing: 5
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "B"; quiet: true; font.bold: true; leftPadding: 0; rightPadding: 0; Layout.preferredWidth: 30; Layout.preferredHeight: 28; onClicked: composerPanel.format("**") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "I"; quiet: true; font.italic: true; leftPadding: 0; rightPadding: 0; Layout.preferredWidth: 30; Layout.preferredHeight: 28; onClicked: composerPanel.format("*") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "</>"; quiet: true; leftPadding: 0; rightPadding: 0; Layout.preferredWidth: 40; Layout.preferredHeight: 28; onClicked: composerPanel.format("`") }
+                        AppButton { visible: backend.settings.show_formatting_buttons === true; text: "Code"; quiet: true; leftPadding: 0; rightPadding: 0; Layout.preferredWidth: 48; Layout.preferredHeight: 28; onClicked: composerPanel.format("```") }
+                        AppButton { text: "Attach"; iconGlyph: "\uE723"; quiet: true; Layout.preferredHeight: 30; enabled: backend.selectedName !== ""; onClicked: backend.chooseAttachments() }
                         Item { Layout.fillWidth: true }
-                        AppText { visible: backend.status !== ""; text: backend.status; color: backend.status.indexOf("WARNING") >= 0 || backend.status.indexOf("Not sent") === 0 ? root.c.danger : root.c.muted; font.pixelSize: 10; elide: Text.ElideRight; Layout.maximumWidth: 280 }
-                        AppText { text: composer.length + " / 4000"; color: composer.length > 3800 ? root.c.danger : root.c.muted; font.pixelSize: 10 }
+                        AppText { visible: root.statusNeedsAttention(backend.status); text: backend.status; color: root.c.danger; font.pixelSize: 10; elide: Text.ElideRight; Layout.maximumWidth: 280 }
+                        AppText { visible: composer.length >= 3500; text: composer.length + " / 4000"; color: composer.length > 3800 ? root.c.danger : root.c.muted; font.pixelSize: 10 }
                     }
                     RowLayout {
                         visible: backend.pendingAttachments.length > 0; Layout.fillWidth: true; Layout.preferredHeight: visible ? 32 : 0; spacing: 5
@@ -793,7 +886,7 @@ ApplicationWindow {
                                 RowLayout { anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 5; spacing: 5
                                     AppText { id: attachmentName; Layout.fillWidth: true; text: modelData.name; font.pixelSize: 11; elide: Text.ElideMiddle }
                                     AppText { id: attachmentSize; text: modelData.sizeLabel; color: root.c.muted; font.pixelSize: 9 }
-                                    AppButton { text: "×"; quiet: true; Layout.preferredWidth: 24; Layout.preferredHeight: 24; onClicked: backend.removeAttachment(index) }
+                                    AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; Layout.preferredWidth: 26; Layout.preferredHeight: 26; ToolTip.visible: hovered; ToolTip.text: "Remove attachment"; onClicked: backend.removeAttachment(index) }
                                 }
                             }
                         }
@@ -815,7 +908,7 @@ ApplicationWindow {
                                 if (shouldSend) { backend.sendMessage(text); text = ""; event.accepted = true }
                             }
                         }
-                        AppButton { visible: backend.settings.show_send_button === true; text: "Send"; accent: true; Layout.preferredWidth: 68; Layout.fillHeight: true; enabled: backend.selectedName !== "" && (composer.length > 0 || backend.pendingAttachments.length > 0); onClicked: { backend.sendMessage(composer.text); composer.text = "" } }
+                        AppButton { visible: backend.settings.show_send_button === true; text: "Send"; iconGlyph: "\uE724"; accent: true; Layout.fillHeight: true; enabled: backend.selectedName !== "" && (composer.length > 0 || backend.pendingAttachments.length > 0); onClicked: { backend.sendMessage(composer.text); composer.text = "" } }
                     }
                 }
                 function format(marker) {
@@ -844,11 +937,11 @@ ApplicationWindow {
                 Rectangle { anchors.centerIn: parent; width: 2; height: 40; radius: 1; color: parent.SplitHandle.hovered || parent.SplitHandle.pressed ? root.c.accent : root.alphaColor(root.c.text, .16) }
             }
             Panel {
-                id: serverChannels; SplitView.minimumWidth: 180; SplitView.maximumWidth: 360; SplitView.preferredWidth: backend.serverChannelWidth; color: root.strongSurface
+                id: serverChannels; SplitView.minimumWidth: 150; SplitView.maximumWidth: 360; SplitView.preferredWidth: backend.serverChannelWidth; color: root.strongSurface
                 ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 8
                     RowLayout { Layout.fillWidth: true
                         AppText { text: backend.selectedServer.name || "Server"; font.pixelSize: 18; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                        AppButton { text: "•••"; quiet: true; Layout.preferredWidth: 38; ToolTip.visible: hovered; ToolTip.text: "Server menu"; onClicked: serverActionsMenu.popup() }
+                        AppButton { text: ""; iconGlyph: "\uE712"; quiet: true; Layout.preferredWidth: 38; ToolTip.visible: hovered; ToolTip.text: "Server menu"; onClicked: serverActionsMenu.popup() }
                         AppMenu { id: serverActionsMenu
                             AppMenuItem { text: "Create invite"; onTriggered: invitePopup.open() }
                             AppMenuItem { text: "Server settings"; onTriggered: serverSettings.open() }
@@ -862,7 +955,7 @@ ApplicationWindow {
                     AppButton { text: "Create channel"; Layout.fillWidth: true; onClicked: { backend.createServerChannel(newChannelName.text); newChannelName.text = "" } }
                 }
             }
-            Item { SplitView.minimumWidth: 380; SplitView.fillWidth: true
+            Item { SplitView.minimumWidth: 300; SplitView.fillWidth: true
               ColumnLayout { anchors.fill: parent; spacing: 10
                 RowLayout { Layout.fillWidth: true
                     AppText { text: "# " + (backend.selectedChannel.name || "channel"); font.pixelSize: 21; font.bold: true }
@@ -870,21 +963,32 @@ ApplicationWindow {
                     AppText { text: (backend.selectedServer.members || []).length + " members"; color: root.c.muted; font.pixelSize: 12 }
                 }
                 Panel { Layout.fillWidth: true; Layout.fillHeight: true; color: root.alphaColor(root.messageSurface, backend.messageBackgroundOpacity)
-                    ListView { anchors.fill: parent; anchors.margins: 14; clip: true; spacing: 9; model: backend.serverMessages
-                        delegate: Column { required property var modelData; width: ListView.view.width
-                            AppText { text: modelData.sender + "  " + modelData.timestamp; color: modelData.outgoing ? root.c.accent : root.c.text; font.bold: true }
-                            AppText { text: modelData.text; width: parent.width; wrapMode: Text.Wrap; font.pixelSize: 14 }
+                    ListView { id: serverHistory; anchors.fill: parent; anchors.margins: 14; clip: true; spacing: 4; model: backend.serverMessages
+                        property bool followTail: true
+                        onCountChanged: { if (followTail) Qt.callLater(positionViewAtEnd) }
+                        onContentHeightChanged: { if (followTail) Qt.callLater(positionViewAtEnd) }
+                        onMovementEnded: followTail = atYEnd
+                        AppText { anchors.centerIn: parent; visible: serverHistory.count === 0; width: Math.min(300, parent.width - 32); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; text: "No messages in this channel yet.\nStart the encrypted conversation below."; color: root.c.muted }
+                        delegate: Rectangle { id: serverMessage; required property var modelData; width: ListView.view.width; height: serverMessageColumn.implicitHeight + 16; radius: 8; color: serverMessageHover.hovered ? root.alphaColor(root.c.hover, .38) : "transparent"
+                            ColumnLayout { id: serverMessageColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 3
+                                RowLayout { Layout.fillWidth: true; spacing: 7
+                                    AppText { text: serverMessage.modelData.sender; color: serverMessage.modelData.outgoing ? root.c.accent : root.c.text; font.bold: true }
+                                    AppText { text: serverMessage.modelData.timestamp; color: root.c.muted; font.pixelSize: root.captionSize }
+                                }
+                                AppText { text: serverMessage.modelData.text; Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: root.bodySize }
+                            }
+                            HoverHandler { id: serverMessageHover }
                         }
                     }
                 }
                 RowLayout { Layout.fillWidth: true
                     AppField { id: serverComposer; Layout.fillWidth: true; placeholderText: "Message #" + (backend.selectedChannel.name || "channel"); onAccepted: { backend.sendServerMessage(text); text = "" } }
-                    AppButton { text: "Send"; accent: true; onClicked: { backend.sendServerMessage(serverComposer.text); serverComposer.text = "" } }
+                    AppButton { text: "Send"; iconGlyph: "\uE724"; accent: true; onClicked: { backend.sendServerMessage(serverComposer.text); serverComposer.text = "" } }
                 }
-                AppText { visible: backend.status !== ""; text: backend.status; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                AppText { visible: root.statusNeedsAttention(backend.status); text: backend.status; color: root.c.danger; wrapMode: Text.Wrap; Layout.fillWidth: true }
               }
             }
-            Panel { id: serverMembers; SplitView.minimumWidth: 190; SplitView.maximumWidth: 360; SplitView.preferredWidth: backend.serverMemberWidth; color: root.strongSurface; radius: root.corner
+            Panel { id: serverMembers; visible: !root.narrowWindow; SplitView.minimumWidth: 170; SplitView.maximumWidth: 360; SplitView.preferredWidth: backend.serverMemberWidth; color: root.strongSurface; radius: root.corner
                 ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 8
                     AppText { text: "Members"; font.pixelSize: 17; font.bold: true }
                     AppText { text: (backend.selectedServer.members || []).length + " people"; color: root.c.muted; font.pixelSize: 11 }
@@ -913,7 +1017,7 @@ ApplicationWindow {
                 onOpened: { selectedKeys = []; quickInviteCode.text = backend.newInviteCode(); quickInviteExpiry.currentIndex = 2 }
                 background: Rectangle { color: root.c.panel; radius: root.corner; border.color: root.alphaColor(root.c.text, .18) }
                 ColumnLayout { anchors.fill: parent; spacing: 10
-                    RowLayout { Layout.fillWidth: true; AppText { text: "Invite people to " + (backend.selectedServer.name || "server"); font.pixelSize: 20; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight } AppButton { text: "Close"; quiet: true; onClicked: invitePopup.close() } }
+                    RowLayout { Layout.fillWidth: true; AppText { text: "Invite people to " + (backend.selectedServer.name || "server"); font.pixelSize: 20; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight } AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; ToolTip.visible: hovered; ToolTip.text: "Close"; onClicked: invitePopup.close() } }
                     SectionLabel { text: "UNIQUE INVITE CODE" }
                     RowLayout { Layout.fillWidth: true
                         AppField { id: quickInviteCode; Layout.fillWidth: true; readOnly: true }
@@ -938,7 +1042,7 @@ ApplicationWindow {
                 id: serverSettings; parent: Overlay.overlay; anchors.centerIn: parent; width: Math.min(620, root.width - 32); height: Math.min(640, root.height - 32); modal: true; focus: true; padding: 20
                 background: Rectangle { color: root.c.panel; radius: root.corner; border.color: root.alphaColor(root.c.text, .16) }
                 ColumnLayout { anchors.fill: parent; spacing: 10
-                    RowLayout { Layout.fillWidth: true; AppText { text: "Server settings"; font.pixelSize: 22; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: "Close"; quiet: true; onClicked: serverSettings.close() } }
+                    RowLayout { Layout.fillWidth: true; AppText { text: "Server settings"; font.pixelSize: 22; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; ToolTip.visible: hovered; ToolTip.text: "Close"; onClicked: serverSettings.close() } }
                     ScrollView { id: settingsScroll; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                         ColumnLayout { width: settingsScroll.availableWidth; spacing: 10
                             SectionLabel { text: "CUSTOMISATION" }
@@ -1006,15 +1110,12 @@ ApplicationWindow {
         id: friendsView
         ColumnLayout {
             spacing: 12
-            RowLayout { Layout.fillWidth: true
-                ColumnLayout { spacing: 2; AppText { text: "Friends"; font.pixelSize: 23; font.bold: true } AppText { text: "Your pinned encrypted contacts."; color: root.c.muted } }
-                Item { Layout.fillWidth: true }
-                AppButton { text: "Back to messages"; onClicked: backend.openPage("chat") }
-            }
+            ScreenHeader { title: "Friends"; subtitle: "Your favorite encrypted contacts."; backText: root.veryNarrowWindow ? "Back" : "Messages"; onBack: backend.openPage("chat") }
             GridView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true
                 cellWidth: Math.max(220, width / Math.max(1, Math.floor(width / 260))); cellHeight: 92
                 model: backend.favoriteContacts
+                AppText { anchors.centerIn: parent; visible: parent.count === 0; width: Math.min(320, parent.width - 32); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; text: "No favorites yet\nStar a contact from their profile to keep them here."; color: root.c.muted }
                 delegate: Item {
                     required property var modelData; width: GridView.view.cellWidth; height: 88
                     Rectangle { anchors.fill: parent; anchors.margins: 4; radius: root.corner; color: friendArea.containsMouse ? root.c.hover : root.alphaColor(root.c.tile, backend.controlOpacity)
@@ -1040,7 +1141,7 @@ ApplicationWindow {
         id: contactView
         ColumnLayout {
             spacing: 14
-            RowLayout { Layout.fillWidth: true; AppText { text: "Contact profile"; font.pixelSize: 22; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: "Back to chat"; onClicked: backend.openPage("chat") } }
+            ScreenHeader { title: "Contact profile"; subtitle: "Identity, profile, and local contact details."; backText: root.veryNarrowWindow ? "Back" : "Chat"; onBack: backend.openPage("chat") }
             Panel {
                 Layout.fillWidth: true; Layout.preferredHeight: 440; color: root.c.bg; clip: true
                 Rectangle { anchors.fill: parent; color: backend.selectedBannerColor; opacity: .14 }
@@ -1053,11 +1154,11 @@ ApplicationWindow {
                     AppText { text: "@" + backend.selectedName; color: root.c.muted }
                     AppText { visible: backend.selectedCustomStatus !== ""; text: (backend.selectedStatusEmoji ? backend.selectedStatusEmoji + "  " : "") + backend.selectedCustomStatus; font.family: backend.selectedDisplayFont; color: root.c.text }
                     AppText { visible: backend.selectedBio !== ""; text: backend.selectedBio; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                    AppText { visible: backend.selectedBio === "" && backend.selectedCustomStatus === ""; text: backend.selectedIsDemo ? "Demo encrypted echo account" : "Secure Tiles contact"; color: root.c.muted }
-                    RowLayout { Layout.topMargin: 8
-                        AppButton { text: backend.selectedFavorite ? "★ Favorited" : "☆ Add favorite"; selected: backend.selectedFavorite; onClicked: backend.toggleFavoriteContact() }
-                        AppField { id: contactNickname; Layout.preferredWidth: 220; placeholderText: "Local nickname"; text: backend.selectedNickname; maximumLength: 32 }
-                        AppButton { text: "Save nickname"; onClicked: backend.setContactNickname(contactNickname.text) }
+                    AppText { visible: backend.selectedBio === "" && backend.selectedCustomStatus === ""; text: backend.selectedIsDemo ? "Demo encrypted echo account" : "Nightseal contact"; color: root.c.muted }
+                    GridLayout { Layout.fillWidth: true; Layout.topMargin: 8; columns: width < 540 ? 1 : 3; columnSpacing: 8; rowSpacing: 8
+                        AppButton { text: backend.selectedFavorite ? "Favorited" : "Add favorite"; iconGlyph: "\uE734"; selected: backend.selectedFavorite; Layout.fillWidth: parent.columns === 1; onClicked: backend.toggleFavoriteContact() }
+                        AppField { id: contactNickname; Layout.fillWidth: true; placeholderText: "Local nickname"; text: backend.selectedNickname; maximumLength: 32 }
+                        AppButton { text: "Save nickname"; iconGlyph: "\uE74E"; Layout.fillWidth: parent.columns === 1; onClicked: backend.setContactNickname(contactNickname.text) }
                     }
                     AppText { text: "SAFETY NUMBER"; color: root.c.muted; font.pixelSize: 10; font.bold: true; Layout.topMargin: 12 }
                     Rectangle { Layout.preferredWidth: safety.implicitWidth + 28; Layout.preferredHeight: 42; radius: 8; color: root.c.tile; AppText { id: safety; anchors.centerIn: parent; text: backend.safetyNumber; font.family: "Cascadia Mono"; font.bold: true } }
@@ -1072,11 +1173,11 @@ ApplicationWindow {
         id: settingsView
         ColumnLayout {
             spacing: 14
-            RowLayout { Layout.fillWidth: true; AppText { text: "Settings"; font.pixelSize: 22; font.bold: true } AppText { text: "Personalize your Secure Tiles experience"; color: root.c.muted; font.pixelSize: 11 } Item { Layout.fillWidth: true } AppButton { text: "Back to messages"; onClicked: backend.openPage("chat") } }
+            ScreenHeader { title: "Settings"; subtitle: "Personalize your Nightseal experience."; backText: root.veryNarrowWindow ? "Back" : "Messages"; onBack: backend.openPage("chat") }
             RowLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
                 Panel {
-                    Layout.preferredWidth: 184; Layout.fillHeight: true; color: root.strongSurface
+                    Layout.preferredWidth: root.veryNarrowWindow ? 148 : 184; Layout.minimumWidth: 140; Layout.fillHeight: true; color: root.strongSurface
                     ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 5
                         SectionLabel { text: "SETTINGS"; Layout.leftMargin: 9; Layout.topMargin: 5; Layout.bottomMargin: 3 }
                         Repeater { model: ["My Profile", "General", "Appearance", "Privacy", "Notifications", "About"]
@@ -1121,7 +1222,7 @@ ApplicationWindow {
                     AppButton { Layout.fillWidth: true; text: "Profile background"; onClicked: backend.chooseProfileBackground() }
                     AppButton { Layout.fillWidth: true; text: "Banner color"; onClicked: backend.chooseBannerColor() }
                 }
-                RowLayout { visible: backend.profileBannerUrl !== "" || backend.profileBackgroundUrl !== ""; AppButton { text: "Remove banner image"; quiet: true; visible: backend.profileBannerUrl !== ""; onClicked: backend.clearMedia("profile_banner") } AppButton { text: "Remove profile background"; quiet: true; visible: backend.profileBackgroundUrl !== ""; onClicked: backend.clearMedia("profile_background") } }
+                Flow { visible: backend.profileBannerUrl !== "" || backend.profileBackgroundUrl !== ""; Layout.fillWidth: true; spacing: 7; AppButton { text: "Remove banner image"; quiet: true; visible: backend.profileBannerUrl !== ""; onClicked: backend.clearMedia("profile_banner") } AppButton { text: "Remove profile background"; quiet: true; visible: backend.profileBackgroundUrl !== ""; onClicked: backend.clearMedia("profile_background") } }
                 FieldLabel { text: "DISPLAY NAME" }
                 AppField { id: displayName; Layout.fillWidth: true; text: backend.displayName; placeholderText: "How people see you" }
                 FieldLabel { text: "DISPLAY NAME FONT" }
@@ -1140,7 +1241,7 @@ ApplicationWindow {
                 FieldLabel { text: "ABOUT ME" }
                 TextArea { id: bio; Layout.fillWidth: true; Layout.preferredHeight: 92; text: backend.bio; color: root.c.text; placeholderText: "Tell people about yourself"; placeholderTextColor: root.c.muted; wrapMode: TextEdit.Wrap; padding: 11; background: Rectangle { color: root.alphaColor(root.mixColor(root.c.bg, root.buttonSurface, .18), Math.max(.9, backend.controlOpacity)); radius: Math.max(4, root.corner - 2); border.width: bio.activeFocus ? 2 : 1; border.color: bio.activeFocus ? root.c.accent : root.alphaColor(root.mixColor(root.c.text, root.buttonSurface, .62), .55) } }
                 AppButton { text: "Save profile"; accent: true; onClicked: backend.saveProfile(displayName.text, customStatus.text, bio.text, pronouns.text, backend.bannerColor, statusEmoji.text, displayFont.currentValue) }
-                AppText { text: backend.status; color: root.c.muted; font.pixelSize: 11 }
+                AppText { visible: root.statusNeedsAttention(backend.status); text: backend.status; color: root.c.danger; font.pixelSize: 11 }
             }
         }
     }
@@ -1159,16 +1260,16 @@ ApplicationWindow {
                 AppButton { required property var modelData; Layout.fillWidth: true; text: "●   " + modelData.name; textColor: modelData.accent; selected: backend.themeName === modelData.name; onClicked: backend.setTheme(modelData.name) }
               }
             }
-            RowLayout { AppButton { text: "Choose custom accent"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomAccent() } AppButton { text: "Choose background color"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomBackground() } }
+            Flow { Layout.fillWidth: true; spacing: 7; AppButton { text: "Choose custom accent"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomAccent() } AppButton { text: "Choose background color"; enabled: backend.themeName === "Custom"; onClicked: backend.chooseCustomBackground() } }
             SectionLabel { text: "WALLPAPER & SURFACES"; Layout.topMargin: 12 }
-            RowLayout { AppButton { text: "Choose wallpaper / GIF"; onClicked: backend.chooseWallpaper() } AppButton { text: "Remove wallpaper"; quiet: true; enabled: backend.wallpaperUrl !== ""; onClicked: backend.clearMedia("wallpaper") } }
+            Flow { Layout.fillWidth: true; spacing: 7; AppButton { text: "Choose wallpaper / GIF"; iconGlyph: "\uEB9F"; onClicked: backend.chooseWallpaper() } AppButton { text: "Remove wallpaper"; quiet: true; enabled: backend.wallpaperUrl !== ""; onClicked: backend.clearMedia("wallpaper") } }
                 AppText { text: "WALLPAPER VISIBILITY  " + Math.round(backend.wallpaperOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: 0; to: 1; stepSize: .05; value: backend.wallpaperOpacity; onMoved: backend.setOpacity("wallpaper_opacity", value) }
-            AppText { text: "PANELS  " + Math.round(backend.panelOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
+            AppText { text: "MAIN WINDOW PANEL  " + Math.round(backend.panelOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .2; to: 1; stepSize: .05; value: backend.panelOpacity; onMoved: backend.setOpacity("panel_opacity", value) }
             AppText { text: "BUTTONS & INPUTS  " + Math.round(backend.controlOpacity * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .2; to: 1; stepSize: .05; value: backend.controlOpacity; onMoved: backend.setOpacity("control_opacity", value) }
-            RowLayout {
+            Flow { Layout.fillWidth: true; spacing: 7
                 Rectangle { width: 34; height: 34; radius: Math.max(4, root.corner - 4); color: backend.buttonColor; border.width: 1; border.color: root.c.hover }
                 AppButton { text: "Choose control tint"; onClicked: backend.chooseButtonColor() }
                 AppButton { text: "Use theme default"; quiet: true; onClicked: backend.resetButtonColor() }
@@ -1187,13 +1288,13 @@ ApplicationWindow {
             AppText { text: "TEXT SIZE  " + Math.round(backend.fontScale * 100) + "%"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true; Layout.topMargin: 5 }
             Slider { Layout.preferredWidth: Math.min(420, appearanceColumn.width); from: .85; to: 1.25; stepSize: .05; value: backend.fontScale; onMoved: backend.setFontScale(value) }
             AppText { text: "CORNER STYLE"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true; Layout.topMargin: 5 }
-            RowLayout {
+            Flow { Layout.fillWidth: true; spacing: 7
                 Repeater { model: ["Compact", "Soft", "Rounded"]
                     AppButton { required property string modelData; text: modelData; selected: backend.cornerStyle === modelData; onClicked: backend.setCornerStyle(modelData) }
                 }
             }
             AppText { text: "CONVERSATION BACKGROUND"; color: root.alphaColor(root.c.text, .76); font.pixelSize: 11; font.bold: true; Layout.topMargin: 5 }
-            RowLayout {
+            Flow { Layout.fillWidth: true; spacing: 7
                 Rectangle { width: 34; height: 34; radius: Math.max(4, root.corner - 4); color: backend.chatBackground; border.width: 1; border.color: root.c.hover }
                 AppButton { text: "Choose color"; onClicked: backend.chooseChatBackground() }
                 AppButton { text: "Use theme default"; quiet: true; onClicked: backend.resetChatBackground() }
@@ -1207,9 +1308,9 @@ ApplicationWindow {
 
     Component { id: generalSettings; ColumnLayout { spacing: 7
         AppText { text: "General"; font.pixelSize: 19; font.bold: true }
-        AppText { text: "Control how Secure Tiles behaves on this device."; color: root.c.muted }
+        AppText { text: "Control how Nightseal behaves on this device."; color: root.c.muted }
         SectionLabel { text: "STARTUP & UPDATES"; Layout.topMargin: 10 }
-        SettingToggle { title: "Check for updates automatically"; description: "Check GitHub Releases after Secure Tiles starts."; settingKey: "auto_check_updates"; checked: backend.settings.auto_check_updates === undefined ? true : backend.settings.auto_check_updates }
+        SettingToggle { title: "Check for updates automatically"; description: "Check GitHub Releases after Nightseal starts."; settingKey: "auto_check_updates"; checked: backend.settings.auto_check_updates === undefined ? true : backend.settings.auto_check_updates }
         SectionLabel { text: "DISPLAY & SIDEBAR"; Layout.topMargin: 8 }
         SettingToggle { title: "Use 24-hour timestamps"; description: "Show message times in 24-hour format."; settingKey: "use_24_hour_time"; checked: backend.settings.use_24_hour_time === undefined ? true : backend.settings.use_24_hour_time }
         SettingToggle { title: "Remember sidebar state"; description: "Keep the people sidebar collapsed or expanded between sessions."; settingKey: "remember_sidebar"; checked: backend.settings.remember_sidebar === undefined ? true : backend.settings.remember_sidebar }
@@ -1236,16 +1337,16 @@ ApplicationWindow {
     component SettingToggle: Rectangle {
         id: setting; property string title; property string description; property string settingKey; property bool checked
         readonly property color stateColor: checked ? "#22c55e" : "#ef4444"
-        Layout.fillWidth: true; Layout.maximumWidth: 720; Layout.preferredHeight: 64; radius: Math.max(6, root.corner - 2)
-        color: root.alphaColor(settingArea.containsMouse ? Qt.lighter(root.c.tile, 1.08) : root.c.tile, settingArea.containsMouse ? .88 : .72)
-        border.width: 1; border.color: settingArea.containsMouse ? root.alphaColor(root.c.accent, .36) : root.alphaColor(root.c.text, .1)
+        Layout.fillWidth: true; Layout.maximumWidth: 720; Layout.preferredHeight: 70; radius: 0
+        color: settingArea.containsMouse ? root.alphaColor(root.c.hover, .42) : "transparent"
+        border.width: 0
         Behavior on color { ColorAnimation { duration: root.motion } }
         RowLayout {
             anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 14; spacing: 12
             ColumnLayout {
                 Layout.fillWidth: true; spacing: 3
                 AppText { text: setting.title; font.pixelSize: Math.round(14 * root.uiScale); font.bold: true }
-                AppText { Layout.fillWidth: true; text: setting.description; color: root.alphaColor(root.c.text, .76); font.pixelSize: Math.round(12 * root.uiScale); elide: Text.ElideRight }
+                AppText { Layout.fillWidth: true; text: setting.description; color: root.alphaColor(root.c.text, .76); font.pixelSize: Math.round(12 * root.uiScale); wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }
             }
             AppText { text: setting.checked ? "ON" : "OFF"; color: setting.stateColor; font.pixelSize: Math.round(10 * root.uiScale); font.bold: true }
             Rectangle {
@@ -1260,6 +1361,7 @@ ApplicationWindow {
                 }
             }
         }
+        Rectangle { anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; height: 1; color: root.alphaColor(root.c.text, .09) }
         MouseArea { id: settingArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: backend.setPreference(setting.settingKey, !setting.checked) }
     }
 
@@ -1281,9 +1383,9 @@ ApplicationWindow {
     } }
     Component { id: aboutSettings; ColumnLayout { spacing: 7
         RowLayout {
-            Rectangle { width: 52; height: 52; radius: 14; color: root.c.accent; AppText { anchors.centerIn: parent; text: "◆"; color: root.c.bg; font.pixelSize: 18 } }
+            BrandLogo { logoSize: 52 }
             ColumnLayout { spacing: 1
-                AppText { text: "Secure Tiles"; font.pixelSize: 20; font.bold: true }
+                AppText { text: "Nightseal"; font.pixelSize: 20; font.bold: true }
                 AppText { text: "Version " + backend.appVersion; color: root.c.muted; font.pixelSize: 11 }
             }
         }
@@ -1300,7 +1402,7 @@ ApplicationWindow {
         Panel { Layout.fillWidth: true; Layout.maximumWidth: 720; Layout.preferredHeight: 72; color: root.alphaColor(root.c.tile, backend.panelOpacity)
             RowLayout { anchors.fill: parent; anchors.margins: 12; spacing: 10
                 ColumnLayout { Layout.fillWidth: true; spacing: 3
-                    AppText { text: backend.updateReady ? "Version " + backend.updateVersion + " is ready" : "Secure Tiles is kept current through verified GitHub Releases."; font.bold: backend.updateReady }
+                    AppText { text: backend.updateReady ? "Version " + backend.updateVersion + " is ready" : "Nightseal is kept current through verified GitHub Releases."; font.bold: backend.updateReady }
                     AppText { text: backend.updateStatus || "Updates are checked automatically after startup."; color: backend.updateStatus.indexOf("failed") >= 0 ? root.c.danger : root.c.muted; font.pixelSize: 11; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 }
                 AppButton { text: backend.checkingUpdates ? "Checking..." : "Check for updates"; enabled: !backend.checkingUpdates && !backend.updateReady; onClicked: backend.checkForUpdates() }

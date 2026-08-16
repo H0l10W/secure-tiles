@@ -1,4 +1,4 @@
-"""Run the Secure Tiles username directory and opaque-message relay.
+"""Run the Nightseal username directory and opaque-message relay.
 
 The server stores public contact cards and ciphertext. It never receives private
 keys or plaintext. Put it behind an HTTPS reverse proxy for non-local use.
@@ -357,7 +357,7 @@ class Database:
 
 class Handler(BaseHTTPRequestHandler):
     db: Database
-    server_version = "SecureTilesRelay/0.2"
+    server_version = "NightsealRelay/0.2"
 
     def log_message(self, fmt, *args):
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -431,16 +431,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Secure Tiles encrypted-message relay")
+    parser = argparse.ArgumentParser(description="Nightseal encrypted-message relay")
     parser.add_argument("--host", default="127.0.0.1"); parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--database", type=Path, default=Path("relay.db")); args = parser.parse_args()
     Handler.db = Database(args.database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Secure Tiles relay listening on http://{args.host}:{args.port}")
+    print(f"Nightseal relay listening on http://{args.host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nSecure Tiles relay stopped.")
+        print("\nNightseal relay stopped.")
     finally:
         server.server_close()
         Handler.db.connection.close()

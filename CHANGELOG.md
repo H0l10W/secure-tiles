@@ -1,6 +1,18 @@
 # Changelog
 
-All notable changes to Secure Tiles are recorded in this file.
+All notable changes to Nightseal are recorded in this file.
+
+## 0.5.0 - 2026-08-16
+
+- Rebranded the application from Secure Tiles to Nightseal with the tagline “Private conversations. Keys stay yours”.
+- Added a new Nightseal logo across the application interface, Windows executable metadata, installer, and release assets.
+- Kept transition release aliases so existing Secure Tiles installations can discover and install the Nightseal update.
+- Added a cohesive design system with consistent typography, spacing, controls, Fluent-style icons, headers, menus, and modal presentation.
+- Improved narrow-window behavior across authentication, contacts, conversations, servers, profiles, settings, and popups.
+- Refined contact selection, empty states, message presentation, composer actions, attachment controls, and settings organization.
+- Removed routine inline success notices while retaining actionable warnings and failures.
+- Fixed compact formatting controls overlapping or displaying off-center text.
+- Fixed conversations scrolling away from the newest message after sending or after attachment previews resize.
 
 ## 0.4.0 - 2026-08-15
 

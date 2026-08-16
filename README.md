@@ -1,4 +1,10 @@
-# Secure Tiles
+<p align="center">
+  <img src="assets/nightseal-logo.png" alt="Nightseal logo" width="180">
+</p>
+
+# Nightseal
+
+**Private conversations. Keys stay yours.**
 
 A modern, Qt Quick desktop messenger with end-to-end encrypted delivery and username discovery. It uses PyNaCl/libsodium rather than implementing cryptography itself. Its PySide6/QML interface is hardware accelerated, DPI aware, and responsive during live window resizing.
 
@@ -29,7 +35,7 @@ Release downloads provide a per-user Windows installer and a standalone portable
 
 ## Updates and releases
 
-Secure Tiles checks the public `H0l10W/secure-tiles` GitHub Releases feed after startup. A newer version is downloaded in the background, checked against the SHA-256 digest returned by GitHub, and extracted with path-traversal and size protections. The application is only replaced after the user chooses **Restart to update**. Replaced files are backed up under `~/.secure_tiles/update_backups`.
+Nightseal checks the public `H0l10W/nightseal` GitHub Releases feed after startup. A newer version is downloaded in the background, checked against the SHA-256 digest returned by GitHub, and extracted with path-traversal and size protections. The application is only replaced after the user chooses **Restart to update**. Replaced files are backed up under `~/.secure_tiles/update_backups`.
 
 Pushing to `main` runs the Windows test suite. When the version in `secure_tiles/__init__.py` has not been released before, the workflow creates a matching GitHub Release and attaches the installer, portable executable, and changelog. Bump `__version__` and update `CHANGELOG.md` before pushing a new release.
 
