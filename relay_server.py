@@ -152,13 +152,17 @@ class Database:
             self.connection.execute("UPDATE servers SET name = ?, accent = ?, icon = ? WHERE id = ?", (normalize_server_name(payload["name"]), str(payload.get("accent", "#5865f2"))[:16], icon, server_id))
         elif action == "channel.create":
             channel_type = str(payload.get("type", "text"));
-            if channel_type not in {"text", "voice"}: raise ValueError("Unsupported channel type")
+            if channel_type not in {"text", "voice", "category"}: raise ValueError("Unsupported channel type")
             position = self.connection.execute("SELECT COUNT(*) AS count FROM server_channels WHERE server_id = ?", (server_id,)).fetchone()["count"]
             self.connection.execute("INSERT INTO server_channels VALUES (?, ?, ?, ?, ?, ?)", (server_id, uuid.uuid4().hex, normalize_channel_name(payload["name"]), channel_type, position, str(payload.get("topic", ""))[:120]))
         elif action == "channel.update":
             channel_id = str(payload["channel_id"])
-            if not self.connection.execute("SELECT 1 FROM server_channels WHERE server_id = ? AND id = ?", (server_id, channel_id)).fetchone(): raise ValueError("Channel not found")
-            self.connection.execute("UPDATE server_channels SET name = ?, topic = ? WHERE server_id = ? AND id = ?", (normalize_channel_name(payload["name"]), str(payload.get("topic", ""))[:120], server_id, channel_id))
+            channel = self.connection.execute("SELECT type FROM server_channels WHERE server_id = ? AND id = ?", (server_id, channel_id)).fetchone()
+            if not channel: raise ValueError("Channel not found")
+            category_id = str(payload.get("category_id", ""))
+            if category_id and not self.connection.execute("SELECT 1 FROM server_channels WHERE server_id = ? AND id = ? AND (type = 'category' OR (type = 'voice' AND topic = 'category'))", (server_id, category_id)).fetchone(): raise ValueError("Category not found")
+            topic = f"category:{category_id}" if channel["type"] == "text" and "category_id" in payload else str(payload.get("topic", ""))[:120]
+            self.connection.execute("UPDATE server_channels SET name = ?, topic = ? WHERE server_id = ? AND id = ?", (normalize_channel_name(payload["name"]), topic, server_id, channel_id))
         elif action == "channel.delete":
             channel_id = str(payload["channel_id"])
             count = self.connection.execute("SELECT COUNT(*) AS count FROM server_channels WHERE server_id = ? AND type = 'text'", (server_id,)).fetchone()["count"]

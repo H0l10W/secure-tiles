@@ -2,6 +2,16 @@
 
 All notable changes to Nightseal are recorded in this file.
 
+## 0.5.5 - 2026-08-16
+
+- Redesigned server views with clearly separated channel, conversation, composer, and member regions.
+- Added a server-name action menu and a full-window server settings workspace for profiles, invites, roles, permissions, members, and server deletion.
+- Added synchronized server channel categories with category creation, collapsible sections, remembered visibility, and drag-and-drop channel organization.
+- Added a visible channel preview while dragging and retained compatibility with existing hosted relays.
+- Fixed server channel and member panel resizing snapping back after a drag.
+- Fixed server action buttons becoming misaligned or overlapping at narrow panel widths.
+- Added restoration of the last normal window size, screen position, and maximized state with safe fallback when a saved display is unavailable.
+
 ## 0.5.0 - 2026-08-16
 
 - Rebranded the application from Secure Tiles to Nightseal with the tagline “Private conversations. Keys stay yours”.

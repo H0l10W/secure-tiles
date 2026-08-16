@@ -21,6 +21,10 @@ ApplicationWindow {
     property color buttonSurface: backend.buttonColor
     property color messageSurface: backend.chatBackground
     property bool favoritesOnly: false
+    property bool channelDragPreviewVisible: false
+    property string channelDragPreviewName: ""
+    property real channelDragPreviewX: 0
+    property real channelDragPreviewY: 0
     readonly property bool narrowWindow: width < 940
     readonly property bool veryNarrowWindow: width < 800
     readonly property int spaceXs: 4
@@ -156,6 +160,7 @@ ApplicationWindow {
         property bool selected: false
         property color textColor: root.c.text
         property string iconGlyph: ""
+        property bool alignLeft: false
         property real iconOffsetX: 0
         property real iconOffsetY: 0
         property bool iconOnly: text === "" && iconGlyph !== ""
@@ -173,7 +178,7 @@ ApplicationWindow {
         Behavior on opacity { NumberAnimation { duration: root.motion } }
         contentItem: RowLayout {
             spacing: control.text !== "" ? 7 : 0
-            Item { Layout.fillWidth: true }
+            Item { visible: !control.alignLeft; Layout.fillWidth: true }
             AppIcon { visible: control.iconGlyph !== ""; text: control.iconGlyph; color: control.textColor; font.pixelSize: Math.round(15 * root.uiScale); transform: Translate { x: control.iconOffsetX; y: control.iconOffsetY } }
             Text {
                 visible: control.text !== ""
@@ -238,10 +243,15 @@ ApplicationWindow {
 
     component AppMenuItem: MenuItem {
         id: menuItem
+        property string iconGlyph: ""
+        property bool danger: false
         implicitWidth: 210; implicitHeight: 38
         leftPadding: 12; rightPadding: 12
         font.family: "Segoe UI"; font.pixelSize: Math.round(13 * root.uiScale)
-        contentItem: Text { text: menuItem.text; color: menuItem.enabled ? root.c.text : root.alphaColor(root.c.muted, .48); font: menuItem.font; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; renderType: Text.NativeRendering }
+        contentItem: RowLayout { spacing: 10
+            AppIcon { visible: menuItem.iconGlyph !== ""; text: menuItem.iconGlyph; color: menuItem.danger ? root.c.danger : root.c.muted; Layout.preferredWidth: 18 }
+            Text { text: menuItem.text; color: menuItem.enabled ? (menuItem.danger ? root.c.danger : root.c.text) : root.alphaColor(root.c.muted, .48); font: menuItem.font; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; renderType: Text.NativeRendering; Layout.fillWidth: true }
+        }
         background: Rectangle { radius: 7; color: menuItem.highlighted ? root.alphaColor(root.c.accent, .3) : menuItem.hovered ? root.alphaColor(root.c.hover, .82) : "transparent"; border.color: menuItem.highlighted ? root.alphaColor(root.c.accent, .58) : "transparent"; Behavior on color { ColorAnimation { duration: root.motion } } }
     }
 
@@ -365,6 +375,18 @@ ApplicationWindow {
     MouseArea { z: 201; enabled: root.visibility !== Window.Maximized; anchors { right: parent.right; top: parent.top } width: 10; height: 10; cursorShape: Qt.SizeBDiagCursor; onPressed: root.startSystemResize(Qt.RightEdge | Qt.TopEdge) }
     MouseArea { z: 201; enabled: root.visibility !== Window.Maximized; anchors { left: parent.left; bottom: parent.bottom } width: 10; height: 10; cursorShape: Qt.SizeBDiagCursor; onPressed: root.startSystemResize(Qt.LeftEdge | Qt.BottomEdge) }
     MouseArea { z: 201; enabled: root.visibility !== Window.Maximized; anchors { right: parent.right; bottom: parent.bottom } width: 10; height: 10; cursorShape: Qt.SizeFDiagCursor; onPressed: root.startSystemResize(Qt.RightEdge | Qt.BottomEdge) }
+
+    Rectangle {
+        visible: root.channelDragPreviewVisible
+        x: Math.max(8, Math.min(root.width - width - 8, root.channelDragPreviewX + 12))
+        y: Math.max(titleBar.height + 8, Math.min(root.height - height - 8, root.channelDragPreviewY + 12))
+        width: Math.min(220, dragPreviewLabel.implicitWidth + 42); height: 38; radius: 8; z: 1000
+        color: root.mixColor(root.c.tile, root.c.accent, .28); border.width: 1; border.color: root.c.accent
+        RowLayout { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 8
+            AppText { text: "#"; color: root.c.muted; font.bold: true }
+            AppText { id: dragPreviewLabel; text: root.channelDragPreviewName; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+        }
+    }
 
     Connections {
         target: backend
@@ -938,40 +960,106 @@ ApplicationWindow {
             }
             Panel {
                 id: serverChannels; SplitView.minimumWidth: 150; SplitView.maximumWidth: 360; SplitView.preferredWidth: backend.serverChannelWidth; color: root.strongSurface
-                ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 8
-                    RowLayout { Layout.fillWidth: true
-                        AppText { text: backend.selectedServer.name || "Server"; font.pixelSize: 18; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                        AppButton { text: ""; iconGlyph: "\uE712"; quiet: true; Layout.preferredWidth: 38; ToolTip.visible: hovered; ToolTip.text: "Server menu"; onClicked: serverActionsMenu.popup() }
+                ColumnLayout { anchors.fill: parent; spacing: 0
+                    Item { Layout.fillWidth: true; Layout.preferredHeight: 56
+                        Rectangle { anchors.fill: parent; anchors.margins: 5; radius: 8; color: serverHeaderArea.containsMouse || serverActionsMenu.visible ? root.alphaColor(root.c.hover, .55) : "transparent" }
+                        RowLayout { anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 13; spacing: 6
+                            ColumnLayout { Layout.fillWidth: true; spacing: 1
+                                AppText { text: backend.selectedServer.name || "Server"; font.pixelSize: 17; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                                AppText { text: (backend.selectedServer.members || []).length + " encrypted members"; color: root.c.muted; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
+                            }
+                            AppIcon { text: serverActionsMenu.visible ? "\uE70E" : "\uE70D"; color: root.c.muted; font.pixelSize: 12 }
+                        }
+                        MouseArea { id: serverHeaderArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: serverActionsMenu.popup(5, parent.height) }
                         AppMenu { id: serverActionsMenu
-                            AppMenuItem { text: "Create invite"; onTriggered: invitePopup.open() }
-                            AppMenuItem { text: "Server settings"; onTriggered: serverSettings.open() }
+                            implicitWidth: Math.max(238, serverChannels.width - 10)
+                            AppMenuItem { text: "Invite people"; iconGlyph: "\uE8FA"; onTriggered: invitePopup.open() }
+                            AppMenuItem { text: "Server settings"; iconGlyph: "\uE713"; onTriggered: serverSettings.open() }
+                            AppMenuSeparator { }
+                            AppMenuItem { text: "Create channel"; iconGlyph: "\uE710"; onTriggered: newChannelName.forceActiveFocus() }
+                            AppMenuItem { text: "Create category"; iconGlyph: "\uE8B7"; onTriggered: categoryCreatePopup.open() }
+                            AppMenuItem { text: "Change server icon"; iconGlyph: "\uEB9F"; onTriggered: backend.chooseServerIcon() }
+                            AppMenuSeparator { }
+                            AppMenuItem { text: "Security and permissions"; iconGlyph: "\uEA18"; onTriggered: { serverSettings.section = 2; serverSettings.open() } }
                         }
                     }
-                    SectionLabel { text: "TEXT CHANNELS" }
-                    ListView { Layout.fillWidth: true; Layout.fillHeight: true; model: backend.selectedServer.channels || []; spacing: 4
-                        delegate: AppButton { required property var modelData; visible: modelData.type === "text"; width: ListView.view.width; text: "#  " + modelData.name; quiet: true; selected: backend.selectedChannelId === modelData.id; onClicked: backend.selectServerChannel(modelData.id) }
+                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .1) }
+                    ListView { id: serverChannelList; Layout.fillWidth: true; Layout.fillHeight: true; Layout.leftMargin: 7; Layout.rightMargin: 7; model: backend.serverChannelGroups; spacing: 8; clip: true
+                        delegate: Column { id: categoryGroup; required property var modelData; width: ListView.view.width; spacing: 2
+                            Rectangle { width: parent.width; height: 30; radius: 6; color: categoryDrop.containsDrag ? root.alphaColor(root.c.accent, .24) : categoryHeader.containsMouse ? root.alphaColor(root.c.hover, .36) : "transparent"
+                                RowLayout { anchors.fill: parent; anchors.leftMargin: 7; anchors.rightMargin: 5; spacing: 6
+                                    AppIcon { visible: categoryGroup.modelData.category; text: categoryGroup.modelData.collapsed ? "\uE76C" : "\uE70D"; color: root.c.muted; font.pixelSize: 10; Layout.preferredWidth: 12 }
+                                    AppText { text: categoryGroup.modelData.name.toUpperCase(); color: root.c.muted; font.pixelSize: 10; font.bold: true; font.letterSpacing: .6; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    AppText { text: categoryGroup.modelData.channels.length; color: root.c.muted; font.pixelSize: 9 }
+                                    AppIcon { visible: !categoryGroup.modelData.category; text: "\uE710"; color: root.c.muted; font.pixelSize: 14; Layout.preferredWidth: 18 }
+                                }
+                                MouseArea { id: categoryHeader; anchors.fill: parent; hoverEnabled: true; enabled: categoryGroup.modelData.category; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: backend.toggleServerCategory(categoryGroup.modelData.id) }
+                                MouseArea { anchors.right: parent.right; anchors.top: parent.top; anchors.bottom: parent.bottom; width: 34; enabled: !categoryGroup.modelData.category; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: newChannelName.forceActiveFocus() }
+                                DropArea { id: categoryDrop; anchors.fill: parent
+                                    onDropped: function(drop) { if (drop.source && drop.source.channelId !== undefined) backend.moveServerChannel(drop.source.channelId, categoryGroup.modelData.id); drop.acceptProposedAction() }
+                                }
+                            }
+                            Repeater { model: categoryGroup.modelData.collapsed ? [] : categoryGroup.modelData.channels
+                                Item { id: channelNode; required property var modelData; width: categoryGroup.width; height: 38
+                                    AppButton { anchors.fill: parent; text: "#   " + channelNode.modelData.name; quiet: true; selected: backend.selectedChannelId === channelNode.modelData.id; alignLeft: true; leftPadding: 12; rightPadding: 10; font.bold: selected }
+                                    Item { id: channelDragProxy; property string channelId: channelNode.modelData.id; width: channelNode.width; height: channelNode.height; opacity: 0
+                                        Drag.active: channelDrag.drag.active; Drag.source: channelDragProxy; Drag.hotSpot.x: width / 2; Drag.hotSpot.y: height / 2
+                                    }
+                                    MouseArea { id: channelDrag; anchors.fill: parent; hoverEnabled: true; drag.target: channelDragProxy; cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                                        function updatePreview(mouse) { var point = mapToItem(root.contentItem, mouse.x, mouse.y); root.channelDragPreviewX = point.x; root.channelDragPreviewY = point.y }
+                                        onPressed: function(mouse) { root.channelDragPreviewName = channelNode.modelData.name; root.channelDragPreviewVisible = true; updatePreview(mouse) }
+                                        onPositionChanged: function(mouse) { if (pressed) updatePreview(mouse) }
+                                        onClicked: backend.selectServerChannel(channelNode.modelData.id)
+                                        onReleased: { channelDragProxy.Drag.drop(); channelDragProxy.x = 0; channelDragProxy.y = 0; root.channelDragPreviewVisible = false }
+                                        onCanceled: { channelDragProxy.x = 0; channelDragProxy.y = 0; root.channelDragPreviewVisible = false }
+                                    }
+                                }
+                            }
+                        }
                     }
-                    AppField { id: newChannelName; Layout.fillWidth: true; placeholderText: "new-channel"; onAccepted: { backend.createServerChannel(text); text = "" } }
-                    AppButton { text: "Create channel"; Layout.fillWidth: true; onClicked: { backend.createServerChannel(newChannelName.text); newChannelName.text = "" } }
+                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .1) }
+                    ColumnLayout { Layout.fillWidth: true; Layout.margins: 10; spacing: 6
+                        AppText { text: "NEW CHANNEL"; color: root.c.muted; font.pixelSize: 10; font.bold: true }
+                        RowLayout { Layout.fillWidth: true; spacing: 6
+                            AppField { id: newChannelName; Layout.fillWidth: true; placeholderText: "channel-name"; onAccepted: { backend.createServerChannel(text); text = "" } }
+                            AppButton { text: ""; iconGlyph: "\uE710"; accent: true; leftPadding: 0; rightPadding: 0; Layout.minimumWidth: 40; Layout.maximumWidth: 40; Layout.preferredWidth: 40; ToolTip.visible: hovered; ToolTip.text: "Create channel"; onClicked: { backend.createServerChannel(newChannelName.text); newChannelName.text = "" } }
+                        }
+                    }
+                }
+            }
+            Popup { id: categoryCreatePopup; parent: Overlay.overlay; anchors.centerIn: parent; width: Math.min(390, root.width - 32); modal: true; focus: true; padding: 18
+                background: Rectangle { color: root.c.panel; radius: root.corner; border.width: 1; border.color: root.alphaColor(root.c.text, .18) }
+                ColumnLayout { width: parent.width; spacing: 10
+                    RowLayout { Layout.fillWidth: true; AppText { text: "Create category"; font.pixelSize: 20; font.bold: true; Layout.fillWidth: true } AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; onClicked: categoryCreatePopup.close() } }
+                    AppText { text: "Categories keep related channels together and can be collapsed."; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                    AppField { id: newCategoryName; Layout.fillWidth: true; placeholderText: "Category name"; onAccepted: { if (text.trim() !== "") { backend.createServerCategory(text); text = ""; categoryCreatePopup.close() } } }
+                    AppButton { text: "Create category"; accent: true; Layout.fillWidth: true; enabled: newCategoryName.text.trim() !== ""; onClicked: { backend.createServerCategory(newCategoryName.text); newCategoryName.text = ""; categoryCreatePopup.close() } }
                 }
             }
             Item { SplitView.minimumWidth: 300; SplitView.fillWidth: true
-              ColumnLayout { anchors.fill: parent; spacing: 10
-                RowLayout { Layout.fillWidth: true
-                    AppText { text: "# " + (backend.selectedChannel.name || "channel"); font.pixelSize: 21; font.bold: true }
+              ColumnLayout { anchors.fill: parent; spacing: 0
+                RowLayout { Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.leftMargin: 16; Layout.rightMargin: 16; spacing: 9
+                    AppText { text: "#"; color: root.c.muted; font.pixelSize: 24; font.bold: true }
+                    ColumnLayout { Layout.fillWidth: true; spacing: 0
+                        AppText { text: backend.selectedChannel.name || "channel"; font.pixelSize: 17; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                        AppText { text: "End-to-end encrypted server channel"; color: root.c.muted; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
+                    }
                     Item { Layout.fillWidth: true }
-                    AppText { text: (backend.selectedServer.members || []).length + " members"; color: root.c.muted; font.pixelSize: 12 }
+                    AppIcon { text: "\uE716"; color: root.c.muted }
+                    AppText { text: (backend.selectedServer.members || []).length; color: root.c.muted; font.pixelSize: 12 }
                 }
-                Panel { Layout.fillWidth: true; Layout.fillHeight: true; color: root.alphaColor(root.messageSurface, backend.messageBackgroundOpacity)
-                    ListView { id: serverHistory; anchors.fill: parent; anchors.margins: 14; clip: true; spacing: 4; model: backend.serverMessages
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .1) }
+                Rectangle { Layout.fillWidth: true; Layout.fillHeight: true; color: root.alphaColor(root.messageSurface, backend.messageBackgroundOpacity)
+                    ListView { id: serverHistory; anchors.fill: parent; anchors.topMargin: 12; anchors.bottomMargin: 10; anchors.leftMargin: 10; anchors.rightMargin: 10; clip: true; spacing: 2; model: backend.serverMessages
                         property bool followTail: true
                         onCountChanged: { if (followTail) Qt.callLater(positionViewAtEnd) }
                         onContentHeightChanged: { if (followTail) Qt.callLater(positionViewAtEnd) }
                         onMovementEnded: followTail = atYEnd
                         AppText { anchors.centerIn: parent; visible: serverHistory.count === 0; width: Math.min(300, parent.width - 32); horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; text: "No messages in this channel yet.\nStart the encrypted conversation below."; color: root.c.muted }
-                        delegate: Rectangle { id: serverMessage; required property var modelData; width: ListView.view.width; height: serverMessageColumn.implicitHeight + 16; radius: 8; color: serverMessageHover.hovered ? root.alphaColor(root.c.hover, .38) : "transparent"
-                            ColumnLayout { id: serverMessageColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 3
-                                RowLayout { Layout.fillWidth: true; spacing: 7
+                        delegate: Rectangle { id: serverMessage; required property var modelData; width: ListView.view.width; height: serverMessageColumn.implicitHeight + 18; radius: 7; color: serverMessageHover.hovered ? root.alphaColor(root.c.hover, .34) : "transparent"
+                            Rectangle { anchors.left: parent.left; anchors.top: parent.top; anchors.topMargin: 9; width: 4; height: 4; radius: 2; color: serverMessage.modelData.outgoing ? root.c.accent : root.alphaColor(root.c.text, .35) }
+                            ColumnLayout { id: serverMessageColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; anchors.leftMargin: 12; anchors.rightMargin: 10; spacing: 3
+                                RowLayout { Layout.fillWidth: true; spacing: 8
                                     AppText { text: serverMessage.modelData.sender; color: serverMessage.modelData.outgoing ? root.c.accent : root.c.text; font.bold: true }
                                     AppText { text: serverMessage.modelData.timestamp; color: root.c.muted; font.pixelSize: root.captionSize }
                                 }
@@ -981,30 +1069,37 @@ ApplicationWindow {
                         }
                     }
                 }
-                RowLayout { Layout.fillWidth: true
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .1) }
+                RowLayout { Layout.fillWidth: true; Layout.margins: 10; spacing: 7
                     AppField { id: serverComposer; Layout.fillWidth: true; placeholderText: "Message #" + (backend.selectedChannel.name || "channel"); onAccepted: { backend.sendServerMessage(text); text = "" } }
-                    AppButton { text: "Send"; iconGlyph: "\uE724"; accent: true; onClicked: { backend.sendServerMessage(serverComposer.text); serverComposer.text = "" } }
+                    AppButton { text: "Send"; iconGlyph: "\uE724"; accent: true; enabled: serverComposer.text.trim() !== ""; onClicked: { backend.sendServerMessage(serverComposer.text); serverComposer.text = "" } }
                 }
-                AppText { visible: root.statusNeedsAttention(backend.status); text: backend.status; color: root.c.danger; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                AppText { visible: root.statusNeedsAttention(backend.status); text: backend.status; color: root.c.danger; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.leftMargin: 12; Layout.rightMargin: 12; Layout.bottomMargin: 8 }
               }
             }
             Panel { id: serverMembers; visible: !root.narrowWindow; SplitView.minimumWidth: 170; SplitView.maximumWidth: 360; SplitView.preferredWidth: backend.serverMemberWidth; color: root.strongSurface; radius: root.corner
-                ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 8
-                    AppText { text: "Members"; font.pixelSize: 17; font.bold: true }
-                    AppText { text: (backend.selectedServer.members || []).length + " people"; color: root.c.muted; font.pixelSize: 11 }
-                    ListView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true; spacing: 10; model: backend.serverMemberGroups
-                        delegate: Column { required property var modelData; width: ListView.view.width; spacing: 5
-                            AppText { text: modelData.name.toUpperCase() + " — " + modelData.members.length; color: modelData.color; font.pixelSize: 11; font.bold: true }
+                ColumnLayout { anchors.fill: parent; spacing: 0
+                    ColumnLayout { Layout.fillWidth: true; Layout.preferredHeight: 56; Layout.leftMargin: 14; Layout.rightMargin: 14; spacing: 1
+                        AppText { text: "Members"; font.pixelSize: 17; font.bold: true }
+                        AppText { text: (backend.selectedServer.members || []).length + " people in this server"; color: root.c.muted; font.pixelSize: 10 }
+                    }
+                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .1) }
+                    ListView { Layout.fillWidth: true; Layout.fillHeight: true; Layout.margins: 10; clip: true; spacing: 14; model: backend.serverMemberGroups
+                        delegate: Column { required property var modelData; width: ListView.view.width; spacing: 6
+                            AppText { text: modelData.name.toUpperCase() + "  —  " + modelData.members.length; color: modelData.color; font.pixelSize: 10; font.bold: true }
                             Repeater { model: modelData.members
-                                Row { required property var modelData; width: parent.width; height: 38; spacing: 8
-                                    Rectangle { width: 30; height: 30; radius: 15; color: root.c.tile
+                                Rectangle { required property var modelData; width: parent.width; height: 42; radius: 7; color: memberHover.hovered ? root.alphaColor(root.c.hover, .42) : "transparent"
+                                  Row { anchors.fill: parent; anchors.leftMargin: 5; anchors.rightMargin: 5; spacing: 9
+                                    Rectangle { width: 32; height: 32; radius: 16; anchors.verticalCenter: parent.verticalCenter; color: root.c.tile; border.width: 1; border.color: root.alphaColor(root.c.text, .1)
                                         AppText { anchors.centerIn: parent; text: modelData.initials; font.pixelSize: 10; font.bold: true }
                                         StatusBadge { anchors.right: parent.right; anchors.bottom: parent.bottom; size: 10; status: modelData.status }
                                     }
-                                    Column { width: parent.width - 38; anchors.verticalCenter: parent.verticalCenter; spacing: 0
+                                    Column { width: parent.width - 41; anchors.verticalCenter: parent.verticalCenter; spacing: 0
                                         AppText { text: modelData.name; width: parent.width; elide: Text.ElideRight; font.pixelSize: 13; font.bold: true; opacity: modelData.status === "Offline" ? .58 : 1 }
-                                        AppText { text: "@" + modelData.username; width: parent.width; elide: Text.ElideRight; color: root.c.muted; font.pixelSize: 10; visible: modelData.status !== "Offline" }
+                                        AppText { text: modelData.status === "Offline" ? "Offline" : "@" + modelData.username; width: parent.width; elide: Text.ElideRight; color: root.c.muted; font.pixelSize: 10; opacity: modelData.status === "Offline" ? .55 : 1 }
                                     }
+                                  }
+                                  HoverHandler { id: memberHover }
                                 }
                             }
                         }
@@ -1039,58 +1134,103 @@ ApplicationWindow {
                 }
             }
             Popup {
-                id: serverSettings; parent: Overlay.overlay; anchors.centerIn: parent; width: Math.min(620, root.width - 32); height: Math.min(640, root.height - 32); modal: true; focus: true; padding: 20
-                background: Rectangle { color: root.c.panel; radius: root.corner; border.color: root.alphaColor(root.c.text, .16) }
-                ColumnLayout { anchors.fill: parent; spacing: 10
-                    RowLayout { Layout.fillWidth: true; AppText { text: "Server settings"; font.pixelSize: 22; font.bold: true } Item { Layout.fillWidth: true } AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; ToolTip.visible: hovered; ToolTip.text: "Close"; onClicked: serverSettings.close() } }
-                    ScrollView { id: settingsScroll; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                        ColumnLayout { width: settingsScroll.availableWidth; spacing: 10
-                            SectionLabel { text: "CUSTOMISATION" }
-                            AppField { id: serverNameEdit; Layout.fillWidth: true; text: backend.selectedServer.name || ""; placeholderText: "Server name" }
-                            AppField { id: serverAccentEdit; Layout.fillWidth: true; text: backend.selectedServer.accent || root.c.accent; placeholderText: "Accent color, e.g. #5865f2" }
-                            RowLayout { Layout.fillWidth: true
-                                AppButton { text: "Choose server icon"; onClicked: backend.chooseServerIcon() }
-                                AppButton { text: "Save appearance"; accent: true; onClicked: backend.updateServer(serverNameEdit.text, serverAccentEdit.text) }
-                                Item { Layout.fillWidth: true }
-                            }
-                            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .14) }
-                            SectionLabel { text: "CUSTOM INVITE" }
-                            AppField { id: customInviteCode; Layout.fillWidth: true; placeholderText: "Custom invite code" }
-                            RowLayout { Layout.fillWidth: true; AppText { text: "Expires"; color: root.c.muted } AppComboBox { id: customInviteExpiry; Layout.fillWidth: true; model: ["1 day", "7 days", "Forever"]; currentIndex: 2 } }
-                            AppButton { text: "Create custom invite"; accent: true; enabled: customInviteCode.text.trim().length >= 4; onClicked: { backend.createServerInviteWithOptions(customInviteCode.text, customInviteExpiry.currentText, []); customInviteCode.text = "" } }
-                            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .14) }
-                            SectionLabel { text: "ROLES AND RULES" }
-                            AppField { id: roleNameEdit; Layout.fillWidth: true; placeholderText: "Custom role name" }
-                            AppField { id: roleColorEdit; Layout.fillWidth: true; text: "#94a3b8"; placeholderText: "Role color" }
-                            Flow { id: permissionFlow; Layout.fillWidth: true; spacing: 6
-                                Repeater { model: backend.serverPermissions
-                                    CheckBox { required property string modelData; text: modelData.replace(/_/g, " "); palette.windowText: root.c.text; checked: modelData === "view_channels" || modelData === "send_messages" }
+                id: serverSettings; parent: Overlay.overlay; x: 0; y: 0; width: root.width; height: root.height; modal: true; focus: true; padding: 0; closePolicy: Popup.CloseOnEscape
+                property int section: 0
+                background: Rectangle { color: root.c.bg }
+                RowLayout { anchors.fill: parent; spacing: 0
+                    Rectangle { Layout.preferredWidth: Math.min(270, Math.max(210, root.width * .25)); Layout.fillHeight: true; color: root.strongSurface
+                        ColumnLayout { anchors.fill: parent; anchors.leftMargin: 18; anchors.rightMargin: 14; anchors.topMargin: 34; anchors.bottomMargin: 24; spacing: 4
+                            AppText { text: (backend.selectedServer.name || "SERVER").toUpperCase(); color: root.c.muted; font.pixelSize: 10; font.bold: true; Layout.leftMargin: 10; Layout.bottomMargin: 6; elide: Text.ElideRight; Layout.fillWidth: true }
+                            AppButton { text: "Server profile"; alignLeft: true; quiet: true; selected: serverSettings.section === 0; Layout.fillWidth: true; onClicked: serverSettings.section = 0 }
+                            AppButton { text: "Invites"; alignLeft: true; quiet: true; selected: serverSettings.section === 1; Layout.fillWidth: true; onClicked: serverSettings.section = 1 }
+                            SectionLabel { text: "PEOPLE"; color: root.c.muted; Layout.topMargin: 14; Layout.leftMargin: 10 }
+                            AppButton { text: "Roles and permissions"; alignLeft: true; quiet: true; selected: serverSettings.section === 2; Layout.fillWidth: true; onClicked: serverSettings.section = 2 }
+                            AppButton { text: "Members"; alignLeft: true; quiet: true; selected: serverSettings.section === 3; Layout.fillWidth: true; onClicked: serverSettings.section = 3 }
+                            Item { Layout.fillHeight: true }
+                            Rectangle { visible: backend.selectedServerOwned; Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.danger, .35) }
+                            AppButton { visible: backend.selectedServerOwned; text: "Delete server"; alignLeft: true; quiet: true; danger: true; Layout.fillWidth: true; onClicked: serverSettings.section = 4 }
+                        }
+                    }
+                    Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: root.alphaColor(root.c.text, .1) }
+                    Item { Layout.fillWidth: true; Layout.fillHeight: true
+                        RowLayout { anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 22; spacing: 8; z: 2
+                            AppButton { text: ""; iconGlyph: "\uE8BB"; quiet: true; Layout.preferredWidth: 42; ToolTip.visible: hovered; ToolTip.text: "Close server settings (Esc)"; onClicked: serverSettings.close() }
+                            AppText { text: "ESC"; color: root.c.muted; font.pixelSize: 9 }
+                        }
+                        ScrollView { id: settingsScroll; anchors.fill: parent; anchors.leftMargin: 38; anchors.rightMargin: 84; anchors.topMargin: 44; anchors.bottomMargin: 28; clip: true; ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ColumnLayout { width: Math.min(760, settingsScroll.availableWidth); spacing: 12
+                                AppText { text: serverSettings.section === 0 ? "Server profile" : serverSettings.section === 1 ? "Invites" : serverSettings.section === 2 ? "Roles and permissions" : serverSettings.section === 3 ? "Members" : "Delete server"; font.pixelSize: 23; font.bold: true; Layout.fillWidth: true }
+                                AppText { text: serverSettings.section === 0 ? "Customise how this server appears throughout Nightseal." : serverSettings.section === 1 ? "Create secure invite codes for people you trust." : serverSettings.section === 2 ? "Control what each role can see and do." : serverSettings.section === 3 ? "Review members and assign their server roles." : "Permanently remove this server and all of its data."; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true; Layout.bottomMargin: 12 }
+
+                                ColumnLayout { visible: serverSettings.section === 0; Layout.fillWidth: true; spacing: 12
+                                    FieldLabel { text: "SERVER NAME" }
+                                    AppField { id: serverNameEdit; Layout.fillWidth: true; text: backend.selectedServer.name || ""; placeholderText: "Server name" }
+                                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .14); Layout.topMargin: 12; Layout.bottomMargin: 12 }
+                                    FieldLabel { text: "SERVER ICON" }
+                                    AppText { text: "Choose a square image so it remains clear in the server rail."; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                    RowLayout { Layout.fillWidth: true
+                                        Rectangle { Layout.preferredWidth: 72; Layout.preferredHeight: 72; radius: 18; color: root.c.tile; border.width: 1; border.color: root.alphaColor(root.c.text, .16); AppText { anchors.centerIn: parent; text: (backend.selectedServer.name || "S").slice(0, 2).toUpperCase(); font.pixelSize: 20; font.bold: true } }
+                                        AppButton { text: "Change server icon"; accent: true; onClicked: backend.chooseServerIcon() }
+                                        Item { Layout.fillWidth: true }
+                                    }
+                                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .14); Layout.topMargin: 12; Layout.bottomMargin: 12 }
+                                    FieldLabel { text: "SERVER ACCENT" }
+                                    AppField { id: serverAccentEdit; Layout.fillWidth: true; text: backend.selectedServer.accent || root.c.accent; placeholderText: "Accent color, e.g. #5865f2" }
+                                    AppButton { text: "Save changes"; accent: true; Layout.alignment: Qt.AlignLeft; onClicked: backend.updateServer(serverNameEdit.text, serverAccentEdit.text) }
                                 }
-                            }
-                            AppButton { text: "Create custom role"; accent: true; onClicked: { var values = []; for (var i = 0; i < permissionFlow.children.length; ++i) if (permissionFlow.children[i].checked) values.push(permissionFlow.children[i].modelData); backend.createServerRole(roleNameEdit.text, roleColorEdit.text, values); roleNameEdit.text = "" } }
-                            SectionLabel { text: "EXISTING ROLES" }
-                            ListView { Layout.fillWidth: true; Layout.preferredHeight: Math.min(contentHeight, 150); model: backend.selectedServer.roles || []; clip: true; spacing: 5; interactive: contentHeight > height
-                                delegate: Rectangle { required property var modelData; width: ListView.view.width; height: 48; radius: 8; color: root.c.tile
-                                    RowLayout { anchors.fill: parent; anchors.margins: 5; spacing: 7
-                                        Rectangle { width: 12; height: 12; radius: 6; color: modelData.color }
-                                        AppField { id: roleRenameField; Layout.fillWidth: true; text: modelData.name; font.bold: true; onAccepted: backend.renameServerRole(modelData.id, text) }
-                                        AppButton { text: "Rename"; onClicked: backend.renameServerRole(modelData.id, roleRenameField.text) }
+
+                                ColumnLayout { visible: serverSettings.section === 1; Layout.fillWidth: true; spacing: 12
+                                    FieldLabel { text: "CUSTOM INVITE CODE" }
+                                    AppField { id: customInviteCode; Layout.fillWidth: true; placeholderText: "Custom invite code" }
+                                    RowLayout { Layout.fillWidth: true; AppText { text: "Expires"; color: root.c.muted } AppComboBox { id: customInviteExpiry; Layout.fillWidth: true; model: ["1 day", "7 days", "Forever"]; currentIndex: 2 } }
+                                    AppButton { text: "Create custom invite"; accent: true; Layout.alignment: Qt.AlignLeft; enabled: customInviteCode.text.trim().length >= 4; onClicked: { backend.createServerInviteWithOptions(customInviteCode.text, customInviteExpiry.currentText, []); customInviteCode.text = "" } }
+                                }
+
+                                ColumnLayout { visible: serverSettings.section === 2; Layout.fillWidth: true; spacing: 12
+                                    FieldLabel { text: "CREATE ROLE" }
+                                    AppField { id: roleNameEdit; Layout.fillWidth: true; placeholderText: "Custom role name" }
+                                    AppField { id: roleColorEdit; Layout.fillWidth: true; text: "#94a3b8"; placeholderText: "Role color" }
+                                    Flow { id: permissionFlow; Layout.fillWidth: true; spacing: 6
+                                        Repeater { model: backend.serverPermissions; CheckBox { required property string modelData; text: modelData.replace(/_/g, " "); palette.windowText: root.c.text; checked: modelData === "view_channels" || modelData === "send_messages" } }
+                                    }
+                                    AppButton { text: "Create custom role"; accent: true; Layout.alignment: Qt.AlignLeft; onClicked: { var values = []; for (var i = 0; i < permissionFlow.children.length; ++i) if (permissionFlow.children[i].checked) values.push(permissionFlow.children[i].modelData); backend.createServerRole(roleNameEdit.text, roleColorEdit.text, values); roleNameEdit.text = "" } }
+                                    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.text, .14); Layout.topMargin: 10; Layout.bottomMargin: 6 }
+                                    FieldLabel { text: "EXISTING ROLES" }
+                                    Repeater { model: backend.selectedServer.roles || []
+                                        Rectangle { required property var modelData; Layout.fillWidth: true; Layout.preferredHeight: 50; radius: 8; color: root.softSurface
+                                            RowLayout { anchors.fill: parent; anchors.margins: 6; spacing: 8
+                                                Rectangle { width: 12; height: 12; radius: 6; color: modelData.color }
+                                                AppField { id: roleRenameField; Layout.fillWidth: true; text: modelData.name; font.bold: true; onAccepted: backend.renameServerRole(modelData.id, text) }
+                                                AppButton { text: "Rename"; onClicked: backend.renameServerRole(modelData.id, roleRenameField.text) }
+                                            }
+                                        }
                                     }
                                 }
-                            }
-                            SectionLabel { text: "MEMBERS" }
-                            AppText { text: "Admins can assign roles through the member list below."; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            ListView { Layout.fillWidth: true; Layout.preferredHeight: Math.min(Math.max(contentHeight, 48), 150); model: backend.selectedServer.members || []; clip: true; interactive: contentHeight > height
-                                delegate: RowLayout { required property var modelData; property var memberData: modelData; width: ListView.view.width; height: 44
-                                    AppText { text: "@" + memberData.card.name; Layout.fillWidth: true; elide: Text.ElideRight }
-                                    AppText { text: memberData.roles.join(", "); color: root.c.muted; elide: Text.ElideRight; Layout.maximumWidth: 130 }
-                                    AppComboBox { Layout.preferredWidth: 150; model: backend.selectedServer.roles || []; textRole: "name"; enabled: memberData.signing_key !== backend.selectedServer.owner_key; onActivated: backend.setServerMemberRoles(memberData.signing_key, [model[index].id]) }
+
+                                ColumnLayout { visible: serverSettings.section === 3; Layout.fillWidth: true; spacing: 6
+                                    Repeater { model: backend.selectedServer.members || []
+                                        Rectangle { required property var modelData; property var memberData: modelData; Layout.fillWidth: true; Layout.preferredHeight: 56; radius: 8; color: root.softSurface
+                                            RowLayout { anchors.fill: parent; anchors.margins: 8; spacing: 10
+                                                Rectangle { width: 34; height: 34; radius: 17; color: root.c.tile; AppText { anchors.centerIn: parent; text: memberData.card.name.slice(0, 2).toUpperCase(); font.pixelSize: 10; font.bold: true } }
+                                                AppText { text: "@" + memberData.card.name; Layout.fillWidth: true; elide: Text.ElideRight; font.bold: true }
+                                                AppText { text: memberData.roles.join(", "); color: root.c.muted; elide: Text.ElideRight; Layout.maximumWidth: 150 }
+                                                AppComboBox { Layout.preferredWidth: 160; model: backend.selectedServer.roles || []; textRole: "name"; enabled: memberData.signing_key !== backend.selectedServer.owner_key; onActivated: backend.setServerMemberRoles(memberData.signing_key, [model[index].id]) }
+                                            }
+                                        }
+                                    }
                                 }
+
+                                ColumnLayout { visible: serverSettings.section === 4; Layout.fillWidth: true; spacing: 12
+                                    Rectangle { Layout.fillWidth: true; implicitHeight: dangerContent.implicitHeight + 28; radius: 10; color: root.alphaColor(root.c.danger, .08); border.width: 1; border.color: root.alphaColor(root.c.danger, .5)
+                                        ColumnLayout { id: dangerContent; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 14; spacing: 8
+                                            AppText { text: "Delete “" + (backend.selectedServer.name || "server") + "”"; font.bold: true; color: root.c.danger }
+                                            AppText { text: "This deletes its channels, roles, invites, membership, and message history for everyone. This cannot be undone."; color: root.c.muted; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                            AppButton { text: "Delete server permanently"; danger: true; Layout.alignment: Qt.AlignLeft; onClicked: deleteServerWarning.open() }
+                                        }
+                                    }
+                                }
+                                Item { Layout.preferredHeight: 20 }
                             }
-                            Rectangle { visible: backend.selectedServerOwned; Layout.fillWidth: true; Layout.preferredHeight: 1; color: root.alphaColor(root.c.danger, .45) }
-                            SectionLabel { visible: backend.selectedServerOwned; text: "DANGER ZONE"; color: root.c.danger }
-                            AppButton { visible: backend.selectedServerOwned; text: "Delete server"; danger: true; onClicked: deleteServerWarning.open() }
-                            Item { Layout.preferredHeight: 4 }
                         }
                     }
                 }

@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Property, Qt, QTimer, QUrl, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Property, QRect, Qt, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage, QWindow
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtWidgets import QApplication, QColorDialog, QFileDialog
 from nacl import secret, utils
@@ -241,8 +241,10 @@ class Controller(QObject):
         } if isinstance(stored_unread, dict) else {}
         self._sidebar_expanded = bool(self.preferences.get("sidebar_expanded", True)) if bool(self.preferences.get("remember_sidebar", True)) else True
         self._sidebar_width = max(230, min(420, int(self.preferences.get("sidebar_width", 276))))
-        self._server_channel_width = max(180, min(360, int(self.preferences.get("server_channel_width", 220))))
-        self._server_member_width = max(190, min(360, int(self.preferences.get("server_member_width", 240))))
+        self._server_channel_width = max(150, min(360, int(self.preferences.get("server_channel_width", 220))))
+        self._server_member_width = max(170, min(360, int(self.preferences.get("server_member_width", 240))))
+        collapsed = self.preferences.get("collapsed_server_categories", {})
+        self._collapsed_server_categories: dict[str, bool] = dict(collapsed) if isinstance(collapsed, dict) else {}
         self._servers: list[dict[str, Any]] = []
         self._selected_server_id = ""
         self._selected_channel_id = ""
@@ -390,6 +392,20 @@ class Controller(QObject):
     @Property('QVariantMap', notify=changed)
     def selectedChannel(self):
         return next((channel for channel in self.selectedServer.get("channels", []) if channel["id"] == self._selected_channel_id), {})
+
+    @Property('QVariantList', notify=changed)
+    def serverChannelGroups(self):
+        channels = self.selectedServer.get("channels", [])
+        categories = [channel for channel in channels if channel.get("type") == "category" or (channel.get("type") == "voice" and channel.get("topic") == "category")]
+        text_channels = [channel for channel in channels if channel.get("type") == "text"]
+        groups = [{"id": "", "name": "Text channels", "category": False,
+                   "collapsed": False, "channels": [channel for channel in text_channels if not str(channel.get("topic", "")).startswith("category:")] }]
+        for category in categories:
+            category_id = str(category["id"])
+            groups.append({"id": category_id, "name": category["name"], "category": True,
+                           "collapsed": bool(self._collapsed_server_categories.get(f"{self._selected_server_id}:{category_id}", False)),
+                           "channels": [channel for channel in text_channels if channel.get("topic") == f"category:{category_id}"]})
+        return groups
 
     @Property('QVariantList', notify=changed)
     def serverMessages(self):
@@ -881,6 +897,28 @@ class Controller(QObject):
     def createServerChannel(self, name: str):
         if self._selected_server_id: self._server_action("channel.create", self._selected_server_id, {"name": name, "type": "text"}, "Channel created.")
 
+    @Slot(str)
+    def createServerCategory(self, name: str):
+        # Voice rows with a reserved topic remain compatible with relays deployed
+        # before native category rows were introduced.
+        if self._selected_server_id: self._server_action("channel.create", self._selected_server_id, {"name": name, "type": "voice", "topic": "category"}, "Category created.")
+
+    @Slot(str)
+    def toggleServerCategory(self, category_id: str):
+        key = f"{self._selected_server_id}:{category_id}"
+        self._collapsed_server_categories[key] = not self._collapsed_server_categories.get(key, False)
+        self._save_preferences(collapsed_server_categories=self._collapsed_server_categories)
+        self._notify()
+
+    @Slot(str, str)
+    def moveServerChannel(self, channel_id: str, category_id: str):
+        channel = next((item for item in self.selectedServer.get("channels", []) if item.get("id") == channel_id and item.get("type") == "text"), None)
+        if channel and self._selected_server_id:
+            self._server_action("channel.update", self._selected_server_id,
+                                {"channel_id": channel_id, "name": channel["name"], "category_id": category_id,
+                                 "topic": f"category:{category_id}" if category_id else ""},
+                                "Channel moved.")
+
     @Slot()
     def createServerInvite(self):
         self.createServerInviteWithOptions(self.newInviteCode(), "Forever", [])
@@ -1068,12 +1106,12 @@ class Controller(QObject):
 
     @Slot(int)
     def setServerChannelWidth(self, value: int):
-        width = max(180, min(360, int(value)))
+        width = max(150, min(360, int(value)))
         if width != self._server_channel_width: self._server_channel_width = width; self._save_preferences(server_channel_width=width)
 
     @Slot(int)
     def setServerMemberWidth(self, value: int):
-        width = max(190, min(360, int(value)))
+        width = max(170, min(360, int(value)))
         if width != self._server_member_width: self._server_member_width = width; self._save_preferences(server_member_width=width)
 
     @Slot(str)
@@ -1551,7 +1589,7 @@ class Controller(QObject):
 
 
 def main():
-    smoke_test = "--smoke-test" in sys.argv
+    smoke_test = "--smoke-test" in sys.argv or os.environ.get("NIGHTSEAL_SMOKE_TEST") == "1"
     if smoke_test: sys.argv.remove("--smoke-test")
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Basic")
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -1572,9 +1610,37 @@ def main():
     width = max(720, min(3840, int(controller.preferences.get("window_width", 1100))))
     height = max(500, min(2160, int(controller.preferences.get("window_height", 720))))
     window.setWidth(width); window.setHeight(height)
+    saved_x, saved_y = controller.preferences.get("window_x"), controller.preferences.get("window_y")
+    if isinstance(saved_x, (int, float)) and isinstance(saved_y, (int, float)):
+        wanted = QRect(int(saved_x), int(saved_y), width, height)
+        screens = application.screens()
+        if any(screen.availableGeometry().intersects(wanted) for screen in screens):
+            window.setPosition(int(saved_x), int(saved_y))
+        elif application.primaryScreen():
+            available = application.primaryScreen().availableGeometry()
+            window.setPosition(available.x() + max(0, (available.width() - width) // 2),
+                               available.y() + max(0, (available.height() - height) // 2))
+    normal_geometry = {"x": window.x(), "y": window.y(), "width": width, "height": height}
+    geometry_timer = QTimer(); geometry_timer.setSingleShot(True); geometry_timer.setInterval(250)
+    def capture_normal_geometry():
+        if window.visibility() == QWindow.Visibility.Windowed:
+            normal_geometry.update(x=window.x(), y=window.y(), width=window.width(), height=window.height())
+    geometry_timer.timeout.connect(capture_normal_geometry)
+    def geometry_changed(*_args):
+        if window.visibility() == QWindow.Visibility.Windowed: geometry_timer.start()
+    window.xChanged.connect(geometry_changed); window.yChanged.connect(geometry_changed)
+    window.widthChanged.connect(geometry_changed); window.heightChanged.connect(geometry_changed)
+    window.visibilityChanged.connect(geometry_changed)
+    if bool(controller.preferences.get("window_maximized", False)):
+        QTimer.singleShot(0, window.showMaximized)
     if smoke_test: QTimer.singleShot(1500, application.quit)
     def closing():
-        controller._save_preferences(window_width=window.width(), window_height=window.height())
+        if not smoke_test:
+            capture_normal_geometry()
+            controller.preferences.update(window_x=normal_geometry["x"], window_y=normal_geometry["y"],
+                                          window_width=normal_geometry["width"], window_height=normal_geometry["height"],
+                                          window_maximized=window.visibility() == QWindow.Visibility.Maximized)
+            controller.store.save_preferences(controller.preferences)
         controller.shutdown()
     application.aboutToQuit.connect(closing)
     sys.exit(application.exec())

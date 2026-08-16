@@ -292,12 +292,16 @@ async function applyServerAction(request, env) {
       statements.push(env.DB.prepare("UPDATE servers SET name = ?, accent = ?, icon = ? WHERE id = ?").bind(cleanServerName(payload.name), String(payload.accent || "#5865f2").slice(0,16), icon, id));
     }
     else if (signed.action === "channel.create") {
-      if (!["text", "voice"].includes(String(payload.type || "text"))) throw new Error("Unsupported channel type");
+      if (!["text", "voice", "category"].includes(String(payload.type || "text"))) throw new Error("Unsupported channel type");
       const count = await env.DB.prepare("SELECT COUNT(*) AS count FROM server_channels WHERE server_id = ?").bind(id).first();
       statements.push(env.DB.prepare("INSERT INTO server_channels VALUES (?, ?, ?, ?, ?, ?)").bind(id, crypto.randomUUID().replaceAll("-", ""), cleanChannelName(payload.name), String(payload.type || "text"), count.count, String(payload.topic || "").slice(0,120)));
     } else if (signed.action === "channel.update") {
-      if (!await env.DB.prepare("SELECT 1 AS found FROM server_channels WHERE server_id = ? AND id = ?").bind(id, String(payload.channel_id)).first()) throw new Error("Channel not found");
-      statements.push(env.DB.prepare("UPDATE server_channels SET name = ?, topic = ? WHERE server_id = ? AND id = ?").bind(cleanChannelName(payload.name), String(payload.topic || "").slice(0,120), id, String(payload.channel_id)));
+      const channel = await env.DB.prepare("SELECT type FROM server_channels WHERE server_id = ? AND id = ?").bind(id, String(payload.channel_id)).first();
+      if (!channel) throw new Error("Channel not found");
+      const categoryId = String(payload.category_id || "");
+      if (categoryId && !await env.DB.prepare("SELECT 1 AS found FROM server_channels WHERE server_id = ? AND id = ? AND (type = 'category' OR (type = 'voice' AND topic = 'category'))").bind(id, categoryId).first()) throw new Error("Category not found");
+      const topic = channel.type === "text" && Object.hasOwn(payload, "category_id") ? `category:${categoryId}` : String(payload.topic || "").slice(0,120);
+      statements.push(env.DB.prepare("UPDATE server_channels SET name = ?, topic = ? WHERE server_id = ? AND id = ?").bind(cleanChannelName(payload.name), topic, id, String(payload.channel_id)));
     } else if (signed.action === "channel.delete") {
       const channel = await env.DB.prepare("SELECT type FROM server_channels WHERE server_id = ? AND id = ?").bind(id, String(payload.channel_id)).first();
       if (!channel) throw new Error("Channel not found");

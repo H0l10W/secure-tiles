@@ -94,6 +94,16 @@ class RelayTests(unittest.TestCase):
         with self.assertRaises(RelayError):
             self.client.server_action(sign_server_action(member, "channel.create", server_id, {"name": "staff", "type": "text"}))
 
+    def test_server_owner_can_create_category_and_move_channel(self):
+        owner = Identity.generate(); card = public_card(owner, "category_owner"); self.client.register(card); server_id = new_server_id()
+        server = self.client.server_action(sign_server_action(owner, "server.create", server_id, {"name": "Categories", "owner_card": card}))
+        channel = next(item for item in server["channels"] if item["type"] == "text")
+        server = self.client.server_action(sign_server_action(owner, "channel.create", server_id, {"name": "Important", "type": "voice", "topic": "category"}))
+        category = next(item for item in server["channels"] if item["type"] == "voice" and item["topic"] == "category")
+        moved = self.client.server_action(sign_server_action(owner, "channel.update", server_id,
+                                                              {"channel_id": channel["id"], "name": channel["name"], "category_id": category["id"]}))
+        self.assertEqual(next(item for item in moved["channels"] if item["id"] == channel["id"])["topic"], f"category:{category['id']}")
+
     def test_server_owner_can_rename_built_in_roles(self):
         owner = Identity.generate(); card = public_card(owner, "role_rename_owner"); self.client.register(card); server_id = new_server_id()
         server = self.client.server_action(sign_server_action(owner, "server.create", server_id, {"name": "Roles", "owner_card": card}))
